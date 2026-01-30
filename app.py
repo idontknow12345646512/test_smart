@@ -6,32 +6,35 @@ import uuid
 from datetime import datetime
 
 # --- 1. DESIGN PODLE TVÉHO NÁKRESU ---
+# --- 1. DESIGN (Oprava šipky sidebaru) ---
 st.set_page_config(page_title="S.M.A.R.T. OS", page_icon="🤖", layout="wide")
 
 st.markdown("""
     <style>
-    /* Odstranění lišt Streamlitu pro čistý vzhled */
-    header, .stDeployButton { visibility: hidden; display: none !important; }
+    /* Schováme pozadí horní lišty, ale NE lištu jako celek, aby zůstala šipka */
+    header[data-testid="stHeader"] {
+        background: rgba(0,0,0,0) !important;
+        color: #FFD700 !important;
+    }
+
+    /* Schováme jen tlačítko 'Deploy' a menu vpravo, šipka vlevo zůstane */
+    .stDeployButton, #MainMenu, footer { visibility: hidden; }
+    
+    /* Vynutíme žlutou barvu pro šipku sidebaru */
+    button[data-testid="stSidebarCollapseIcon"] {
+        color: #FFD700 !important;
+    }
+
     .stApp { background-color: #0e1117; color: #e0e0e0; }
     
-    /* Ikona šipky (sidebar) - žlutá barva podle nákresu */
-    button[kind="header"] { color: #FFD700 !important; }
-    
-    /* Input kapsle - kulaté rohy a tmavé barvy */
+    /* Input kapsle */
     div[data-testid="stChatInput"] { 
         border-radius: 30px !important; 
         background-color: #161b22 !important; 
         border: 1px solid #333 !important;
-        margin-bottom: 5px;
     }
     
-    /* Disclaimer pod inputem - fixní pozice */
-    .disclaimer { 
-        font-size: 0.75rem; 
-        color: #5d636d; 
-        text-align: center; 
-        padding-bottom: 20px; 
-    }
+    .disclaimer { font-size: 0.75rem; color: #5d636d; text-align: center; padding-bottom: 20px; }
     </style>
     """, unsafe_allow_html=True)
 
