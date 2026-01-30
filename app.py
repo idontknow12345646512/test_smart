@@ -117,7 +117,7 @@ else:
             # 2. AI LOGIKA (Gemini)
             genai.configure(api_key=st.secrets["GOOGLE_API_KEY_1"])
             # Systémová instrukce zajišťuje češtinu
-            model = genai.GenerativeModel("gemini-1.5-flash", 
+            model = genai.GenerativeModel("gemini-2.5-flash", 
                 system_instruction="Vždy mluv česky. Jsi S.M.A.R.T. OS, inteligentní asistent.")
             
             # Příprava kontextu (paměti) z historie
