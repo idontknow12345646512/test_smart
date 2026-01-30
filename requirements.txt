@@ -4,3 +4,4 @@ st-gsheets-connection
 pandas
 extra-streamlit-components
 python-docx
+pypdf
