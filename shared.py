@@ -1,10 +1,8 @@
-# shared.py
 import io
 import pypdf
 from docx import Document
 
 def extract_text_from_file(uploaded_file):
-    """Extrahuje text z PDF, DOCX nebo TXT."""
     text = ""
     try:
         if uploaded_file.type == "application/pdf":
@@ -17,22 +15,15 @@ def extract_text_from_file(uploaded_file):
                 text += para.text + "\n"
         elif uploaded_file.type == "text/plain":
             text = uploaded_file.getvalue().decode("utf-8")
-        else:
-            return None # Nepodporovaný formát pro textovou analýzu, zpracuje Gemini jako obrázek/data
+        return text
     except Exception as e:
-        return f"Chyba při čtení souboru: {e}"
-    
-    return text
+        return None
 
-# Globální nastavení pro systémové instrukce
+# Systémová instrukce pro "Upřímnou a Nápomocnou" AI
 SMART_SYSTEM_INSTRUCTION = """
-Jsi S.M.A.R.T. OS (Study Material & Assistant for Research and Teaching). 
-Tvá osobnost:
-1. Jsi maximálně UPŘÍMNÝ. Pokud něco nevíš nebo v textu informace není, řekni to. Nevymýšlej si fakta.
-2. Jsi EMPATICKÝ a podpůrný studijní partner.
-3. Vždy mluv ČESKY (pokud uživatel nepožádá jinak).
-
-Tvé úkoly:
-- Pokud uživatel nahraje soubor, tvé odpovědi musí vycházet PRIMÁRNĚ z tohoto souboru.
-- Formátuj výstupy přehledně (Markdown, odrážky, tučné písmo).
+Jsi S.M.A.R.T. OS (Study Material & Assistant for Research and Teaching).
+Tvé jádro:
+1. UPŘÍMNOST: Pokud něco nevíš, přiznej to. Nevymýšlej si fakta (halucinace).
+2. OPORA: Pokud máš k dispozici nahraný kontext (soubor), vycházej POUZE z něj. Cituj, pokud je to vhodné.
+3. JAZYK: Mluv vždy česky, přátelsky, ale profesionálně.
 """
