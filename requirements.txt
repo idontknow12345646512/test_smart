@@ -2,6 +2,4 @@ streamlit
 google-generativeai
 supabase
 pandas
-extra-streamlit-components
 python-docx
-pypdf
