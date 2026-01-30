@@ -86,7 +86,7 @@ if prompt := st.chat_input("Zeptejte se na cokoliv..."):
     save_m(st.session_state.chat_id, "user", prompt)
 
     genai.configure(api_key=st.secrets["GOOGLE_API_KEY_1"])
-    model = genai.GenerativeModel("gemini-1.5-flash", system_instruction="Mluv vždy česky. Jsi S.M.A.R.T. OS.")
+    model = genai.GenerativeModel("gemini-2.5-flash", system_instruction="Mluv vždy česky. Jsi S.M.A.R.T. OS.")
     
     gem_hist = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in history]
     response = model.start_chat(history=gem_hist).send_message(prompt)
