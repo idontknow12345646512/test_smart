@@ -183,32 +183,36 @@ if not st.session_state.get("chat_id"):
     st.session_state.chat_id = create_chat(user_id) if not chats else chats[0]['id']
 
 st.title("💬 Native Audio Dialog")
-with st.expander("📁 Multimodální kontext (Visual/Doc)"):
+
+# Kontejner pro historii - zajistí, že vše zůstane nahoře
+chat_container = st.container()
+
+with st.expander("📁 Multimodální kontext"):
     up = st.file_uploader("Upload", type=["png","jpg","jpeg","webp","pdf","txt","docx"])
     vis_ctx = process_media(up) if up and up.type.startswith('image') else None
     doc_ctx = extract_text_from_file(up) if up and not up.type.startswith('image') else ""
 
-# Chat History
-try:
-    msgs = supabase.table("messages").select("*").eq("chat_id", st.session_state.chat_id).order("created_at").execute().data
-except: msgs = []
+# Vykreslení historie do kontejneru
+with chat_container:
+    try:
+        msgs = supabase.table("messages").select("*").eq("chat_id", st.session_state.chat_id).order("created_at").execute().data
+    except: msgs = []
+    
+    for m in msgs:
+        with st.chat_message(m["role"]): st.markdown(m["content"])
 
-for m in msgs:
-    with st.chat_message(m["role"]): st.markdown(m["content"])
-
-# --- INPUT LOGIC (ZDE JE OPRAVA) ---
+# --- VSTUPY ---
 col_txt, col_mic = st.columns([0.8, 0.2])
 with col_txt:
     txt_in = st.chat_input("Příkaz...")
 with col_mic:
-    # Dynamický klíč zajistí reset widgetu po každém zpracování
     mic_key = f"mic_{st.session_state.chat_id}_{len(msgs)}"
     aud_in = st.audio_input("🎙️", key=mic_key)
 
+# Logika detekce (stejná)
 final_prompt = None
 native_audio_input = None
 
-# Detekce vstupu se zámkem proti opakování
 if not st.session_state.processing:
     if txt_in:
         final_prompt = txt_in
@@ -217,25 +221,25 @@ if not st.session_state.processing:
         st.session_state.last_processed_audio = aud_in.getvalue()
         final_prompt = "[Hlasová zpráva]"
 
-# --- PROCESSING ---
+# --- ZPRACOVÁNÍ BEZ BUGŮ V UI ---
 if final_prompt:
     st.session_state.processing = True
     
-    with st.chat_message("user"):
-        if native_audio_input: st.audio(aud_in)
-        else: st.markdown(final_prompt)
+    # ZOBRAZENÍ ZPRÁVY PŘÍMO V KONTEJNERU (Okamžitý vizuální feedback)
+    with chat_container:
+        with st.chat_message("user"):
+            if native_audio_input: st.audio(aud_in)
+            else: st.markdown(final_prompt)
     
+    # Zápis do DB (na pozadí)
     supabase.table("messages").insert({
         "chat_id": st.session_state.chat_id, "role": "user", 
         "content": final_prompt, "user_id": user_id
     }).execute()
 
     genai.configure(api_key=rotate_api_key())
-    
-    # Konfigurace Gemini 2.5 Flash Native Audio Dialog
     model_name = "gemini-2.5-flash" 
-    sys_prompt = f"{SMART_SYSTEM_INSTRUCTION}\nMODE: Native Audio Dialog.\nUživatel: {display_name}."
-    if doc_ctx: sys_prompt += f"\nDATA: {doc_ctx[:5000]}"
+    sys_prompt = f"{SMART_SYSTEM_INSTRUCTION}\nUživatel: {display_name}."
 
     try:
         model = genai.GenerativeModel(model_name, system_instruction=sys_prompt)
@@ -244,34 +248,29 @@ if final_prompt:
 
     hist = [{"role": "user" if m["role"]=="user" else "model", "parts": [m["content"]]} for m in msgs]
     
-    with st.spinner("⚡ Gemini 2.5 Processing..."):
-        try:
-            input_payload = []
-            if native_audio_input:
-                input_payload.extend(native_audio_input)
-                input_payload.append("Odpověz na tento hlasový záznam v češtině.")
-            else:
-                input_payload.append(final_prompt)
-            
-            if vis_ctx: input_payload.extend(vis_ctx)
+    with chat_container: # Odpověď se objeví hned pod otázkou v kontejneru
+        with st.chat_message("assistant"):
+            response_placeholder = st.empty() # Placeholder pro streamování/efekt
+            with st.spinner("🧠..."):
+                try:
+                    input_payload = native_audio_input + ["Odpověz v CZ."] if native_audio_input else [final_prompt]
+                    if vis_ctx: input_payload.extend(vis_ctx)
+                    
+                    chat_session = model.start_chat(history=hist)
+                    response = chat_session.send_message(input_payload)
+                    ai_output = response.text
+                    
+                    response_placeholder.markdown(ai_output)
+                    if native_audio:
+                        render_native_audio_dialog(ai_output)
+                        
+                    # Uložení odpovědi
+                    supabase.table("messages").insert({
+                        "chat_id": st.session_state.chat_id, "role": "assistant", 
+                        "content": ai_output, "user_id": user_id
+                    }).execute()
+                except Exception as e:
+                    st.error(f"Error: {e}")
 
-            chat = model.start_chat(history=hist)
-            response = chat.send_message(input_payload)
-            ai_output = response.text
-            
-            with st.chat_message("assistant"):
-                st.markdown(ai_output)
-                if native_audio:
-                    render_native_audio_dialog(ai_output)
-
-            supabase.table("messages").insert({
-                "chat_id": st.session_state.chat_id, "role": "assistant", 
-                "content": ai_output, "user_id": user_id
-            }).execute()
-
-        except Exception as e:
-            st.error(f"Neural Link Error: {e}")
-
-    # Reset a okamžitý rerun pro vyčištění widgetů
     st.session_state.processing = False
     st.rerun()
