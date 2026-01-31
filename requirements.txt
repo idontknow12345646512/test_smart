@@ -4,3 +4,5 @@ supabase
 pillow
 pillow-heif
 gTTS
+pypdf
+python-docx
