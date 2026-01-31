@@ -22,6 +22,12 @@ from shared import extract_text_from_file, SMART_SYSTEM_INSTRUCTION
 # --- 1. KONFIGURACE STRÁNKY ---
 st.set_page_config(page_title="S.M.A.R.T. OS 2026", page_icon="🧬", layout="wide")
 
+# Inicializace stavu pro zabránění nekonečné smyčky
+if "processing" not in st.session_state:
+    st.session_state.processing = False
+if "last_processed_audio" not in st.session_state:
+    st.session_state.last_processed_audio = None
+
 # --- 2. PŘIPOJENÍ SUPABASE ---
 try:
     supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
@@ -63,25 +69,15 @@ def process_media(uploaded_file):
     return None
 
 def process_audio_stream(audio_bytes, mime_type="audio/wav"):
-    """
-    Připraví nativní audio stream pro Gemini 2.5 Flash.
-    Model 2.5 podporuje přímé zpracování waveform dat.
-    """
     return [{"mime_type": mime_type, "data": audio_bytes}]
 
 def render_native_audio_dialog(text_response):
-    """
-    Simulace Native Audio Output z Gemini 2.5.
-    V reálném 2.5 API bychom dostali 'audio/pcm' blob.
-    Zde používáme high-speed syntézu pro emulaci.
-    """
     try:
         tts = gTTS(text=text_response, lang='cs')
         fp = io.BytesIO()
         tts.write_to_fp(fp)
         fp.seek(0)
         b64 = base64.b64encode(fp.read()).decode()
-        # Autoplay HTML5 audio element - neviditelný, jen zvuk
         md = f"""
             <audio autoplay style="display:none;">
             <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
@@ -149,7 +145,6 @@ st.markdown(f"""
     <style>
     .stApp {{ background-color: {'#050505' if current_theme == 'dark' else '#ffffff'}; }}
     [data-testid="stSidebar"] {{ background-color: {'#0a0a0a' if current_theme == 'dark' else '#f0f2f6'}; border-right: 1px solid #333; }}
-    div[data-testid="stAudioInput"] {{ position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 999; width: 300px; }}
     </style>
 """, unsafe_allow_html=True)
 
@@ -176,7 +171,7 @@ with st.sidebar:
             if st.button("Delete", key=f"d_{c['id']}"): delete_chat(c['id'])
             
     st.divider()
-    native_audio = st.toggle("🔊 Native Audio Dialog", value=True, help="Zapne přímou hlasovou odezvu Gemini 2.5")
+    native_audio = st.toggle("🔊 Native Audio Dialog", value=True)
     
     if st.button("Odhlásit"):
         supabase.auth.sign_out()
@@ -187,7 +182,6 @@ with st.sidebar:
 if not st.session_state.get("chat_id"):
     st.session_state.chat_id = create_chat(user_id) if not chats else chats[0]['id']
 
-# Header & Context
 st.title("💬 Native Audio Dialog")
 with st.expander("📁 Multimodální kontext (Visual/Doc)"):
     up = st.file_uploader("Upload", type=["png","jpg","jpeg","webp","pdf","txt","docx"])
@@ -202,29 +196,33 @@ except: msgs = []
 for m in msgs:
     with st.chat_message(m["role"]): st.markdown(m["content"])
 
-# --- INPUT LOGIC (TEXT OR AUDIO) ---
-# Input Area
-col_txt, col_mic = st.columns([0.85, 0.15])
+# --- INPUT LOGIC (ZDE JE OPRAVA) ---
+col_txt, col_mic = st.columns([0.8, 0.2])
 with col_txt:
     txt_in = st.chat_input("Příkaz...")
 with col_mic:
-    # Streamlit Audio Input Widget (Native in 2026/Streamlit 1.40+)
-    aud_in = st.audio_input("🎙️")
+    # Dynamický klíč zajistí reset widgetu po každém zpracování
+    mic_key = f"mic_{st.session_state.chat_id}_{len(msgs)}"
+    aud_in = st.audio_input("🎙️", key=mic_key)
 
 final_prompt = None
 native_audio_input = None
 
-if txt_in:
-    final_prompt = txt_in
-elif aud_in:
-    native_audio_input = process_audio_stream(aud_in.getvalue())
-    final_prompt = "[Audio Stream Data]"
+# Detekce vstupu se zámkem proti opakování
+if not st.session_state.processing:
+    if txt_in:
+        final_prompt = txt_in
+    elif aud_in and aud_in.getvalue() != st.session_state.last_processed_audio:
+        native_audio_input = process_audio_stream(aud_in.getvalue())
+        st.session_state.last_processed_audio = aud_in.getvalue()
+        final_prompt = "[Hlasová zpráva]"
 
 # --- PROCESSING ---
 if final_prompt:
-    # 1. User Message Display & Save
+    st.session_state.processing = True
+    
     with st.chat_message("user"):
-        if aud_in: st.audio(aud_in)
+        if native_audio_input: st.audio(aud_in)
         else: st.markdown(final_prompt)
     
     supabase.table("messages").insert({
@@ -232,40 +230,26 @@ if final_prompt:
         "content": final_prompt, "user_id": user_id
     }).execute()
 
-    # 2. AI Processing
     genai.configure(api_key=rotate_api_key())
     
-    # === GEMINI 2.5 FLASH NATIVE AUDIO CONFIG ===
-    model_name = "gemini-2.5-flash"  # Explicitní verze pro rok 2026
-    
-    # System Instruction pro Audio Dialog
-    sys_prompt = f"""
-    {SMART_SYSTEM_INSTRUCTION}
-    SYSTEM UPDATE 2026: Aktivován modul Gemini 2.5 Flash.
-    MODE: Native Audio Dialog.
-    Pokud dostaneš audio vstup, reaguj přirozenou konverzací.
-    Uživatel: {display_name}.
-    """
+    # Konfigurace Gemini 2.5 Flash Native Audio Dialog
+    model_name = "gemini-2.5-flash" 
+    sys_prompt = f"{SMART_SYSTEM_INSTRUCTION}\nMODE: Native Audio Dialog.\nUživatel: {display_name}."
     if doc_ctx: sys_prompt += f"\nDATA: {doc_ctx[:5000]}"
 
-    # Fallback na starší model, pokud by 2.5 v simulátoru (dnešku) nejel
     try:
         model = genai.GenerativeModel(model_name, system_instruction=sys_prompt)
     except:
         model = genai.GenerativeModel("gemini-2.0-flash-exp", system_instruction=sys_prompt)
 
-    # Historie
     hist = [{"role": "user" if m["role"]=="user" else "model", "parts": [m["content"]]} for m in msgs]
     
-    with st.spinner("⚡ Gemini 2.5 Processing Neural Audio..."):
+    with st.spinner("⚡ Gemini 2.5 Processing..."):
         try:
             input_payload = []
-            
-            # Pokud je aktivní Audio Dialog, posíláme bajty
             if native_audio_input:
                 input_payload.extend(native_audio_input)
-                # Prompt pro model, aby věděl, že má zpracovat audio
-                input_payload.append("Listen to this audio stream and respond in Czech.")
+                input_payload.append("Odpověz na tento hlasový záznam v češtině.")
             else:
                 input_payload.append(final_prompt)
             
@@ -275,23 +259,19 @@ if final_prompt:
             response = chat.send_message(input_payload)
             ai_output = response.text
             
+            with st.chat_message("assistant"):
+                st.markdown(ai_output)
+                if native_audio:
+                    render_native_audio_dialog(ai_output)
+
+            supabase.table("messages").insert({
+                "chat_id": st.session_state.chat_id, "role": "assistant", 
+                "content": ai_output, "user_id": user_id
+            }).execute()
+
         except Exception as e:
-            ai_output = f"Neural Link Error: {e}"
+            st.error(f"Neural Link Error: {e}")
 
-    # 3. AI Output Display & Save
-    with st.chat_message("assistant"):
-        st.markdown(ai_output)
-        
-        # === NATIVE AUDIO DIALOG OUTPUT ===
-        # Pokud je zapnuto v sidebaru, simulujeme přímý audio výstup
-        if native_audio:
-            render_native_audio_dialog(ai_output)
-
-    supabase.table("messages").insert({
-        "chat_id": st.session_state.chat_id, "role": "assistant", 
-        "content": ai_output, "user_id": user_id
-    }).execute()
-    
-    # Refresh pro plynulost dialogu
-    time.sleep(0.5)
+    # Reset a okamžitý rerun pro vyčištění widgetů
+    st.session_state.processing = False
     st.rerun()
