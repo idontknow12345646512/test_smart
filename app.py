@@ -19,16 +19,72 @@ except ImportError:
 
 from shared import extract_text_from_file, SMART_SYSTEM_INSTRUCTION
 
-# --- 1. KONFIGURACE STRÁNKY ---
+# --- 1. KONFIGURACE STRÁNKY & CYBERPUNK DESIGN ---
 st.set_page_config(page_title="S.M.A.R.T. OS 2026", page_icon="🧬", layout="wide")
 
-# Inicializace stavů pro stabilitu UI
-if "processing" not in st.session_state:
-    st.session_state.processing = False
-if "last_processed_audio" not in st.session_state:
-    st.session_state.last_processed_audio = None
-if "v_counter" not in st.session_state:
-    st.session_state.v_counter = 0
+if "processing" not in st.session_state: st.session_state.processing = False
+if "last_processed_audio" not in st.session_state: st.session_state.last_processed_audio = None
+if "v_counter" not in st.session_state: st.session_state.v_counter = 0
+
+# --- KOMPLETNÍ TUNING UI (CSS ANIMACE A DESIGN) ---
+st.markdown("""
+    <style>
+    /* Hlavní vizuál systému */
+    .stApp {
+        background: radial-gradient(circle at 50% 50%, #0d0d1a 0%, #050505 100%);
+        color: #e0e0ff;
+        font-family: 'Inter', sans-serif;
+    }
+    
+    /* Animovaný Glow efekt pro statusy */
+    .stStatusWidget {
+        border: 1px solid #00f2ff !important;
+        box-shadow: 0 0 15px rgba(0, 242, 255, 0.2);
+        animation: glow 2s infinite alternate;
+        background: rgba(0, 242, 255, 0.05) !important;
+    }
+    
+    @keyframes glow {
+        from { box-shadow: 0 0 5px rgba(0, 242, 255, 0.2); }
+        to { box-shadow: 0 0 20px rgba(0, 242, 255, 0.5); }
+    }
+
+    /* Skleněný Sidebar (Glassmorphism) */
+    [data-testid="stSidebar"] {
+        background-color: rgba(10, 10, 20, 0.7) !important;
+        backdrop-filter: blur(20px);
+        border-right: 1px solid rgba(0, 242, 255, 0.1);
+    }
+
+    /* Tuněné chatové bubliny */
+    .stChatMessage {
+        background: rgba(255, 255, 255, 0.03) !important;
+        border: 1px solid rgba(255, 255, 255, 0.05);
+        border-radius: 20px !important;
+        margin-bottom: 10px;
+        transition: all 0.3s ease;
+    }
+    .stChatMessage:hover {
+        transform: translateY(-2px);
+        border: 1px solid rgba(0, 242, 255, 0.3);
+        box-shadow: 0 5px 15px rgba(0, 0, 0, 0.3);
+    }
+
+    /* Stylizace tlačítek */
+    .stButton>button {
+        border-radius: 12px;
+        border: 1px solid rgba(0, 242, 255, 0.3);
+        background: rgba(0, 242, 255, 0.05);
+        color: #00f2ff;
+        font-weight: 600;
+        transition: 0.3s;
+    }
+    .stButton>button:hover {
+        background: rgba(0, 242, 255, 0.2);
+        box-shadow: 0 0 20px rgba(0, 242, 255, 0.4);
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # --- 2. PŘIPOJENÍ SUPABASE ---
 try:
@@ -37,7 +93,7 @@ except Exception as e:
     st.error(f"Critical Database Error: {e}")
     st.stop()
 
-# --- 3. CORE SYSTÉM (GEMINI 2.5 KERNEL) ---
+# --- 3. POMOCNÉ FUNKCE (KERNELY) ---
 
 def init_session():
     if "session" in st.session_state:
@@ -55,7 +111,7 @@ def get_profile(uid):
         res = supabase.table("profiles").select("*").eq("id", uid).execute()
         if res.data: return res.data[0]
     except: pass
-    return {"display_name": "Uživatel", "theme": "dark", "ai_instructions": "", "response_length": "Střední"}
+    return {"display_name": "Uživatel", "theme": "dark"}
 
 def rotate_api_key():
     keys = [st.secrets.get(f"GOOGLE_API_KEY_{i}") for i in range(1, 11)]
@@ -70,38 +126,23 @@ def process_media(uploaded_file):
         return [{"mime_type": "image/jpeg", "data": b.getvalue()}]
     return None
 
-def process_audio_stream(audio_bytes, mime_type="audio/wav"):
-    return [{"mime_type": mime_type, "data": audio_bytes}]
-
 def render_native_audio_dialog(text_response):
-    """Generuje hlas a vrací odhadovanou délku trvání pro synchronizaci."""
+    """Zajišťuje plynulý hlasový výstup bez přerušení."""
     try:
         tts = gTTS(text=text_response, lang='cs')
         fp = io.BytesIO()
         tts.write_to_fp(fp)
         fp.seek(0)
         b64 = base64.b64encode(fp.read()).decode()
-        audio_id = f"audio_{int(time.time())}"
-        md = f"""
-            <audio id="{audio_id}" autoplay style="display:none;">
-            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
-            </audio>
-            """
-        st.markdown(md, unsafe_allow_html=True)
-        return min(len(text_response) * 0.08, 12.0) # Sekundová pauza podle délky textu
-    except Exception:
-        return 0
+        st.markdown(f'<audio autoplay style="display:none;"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
+        return min(len(text_response) * 0.08, 12.0) # Čas na dočtení
+    except: return 0
 
-# --- FUNKCE SPRÁVY CHATŮ ---
+# --- 4. SPRÁVA CHATŮ ---
 def create_chat(uid):
     nid = str(uuid.uuid4())[:8]
-    supabase.table("chats").insert({"id": nid, "user_id": uid, "name": f"Chat {datetime.now().strftime('%H:%M')}"}).execute()
+    supabase.table("chats").insert({"id": nid, "user_id": uid, "name": f"Relace {datetime.now().strftime('%H:%M')}"}).execute()
     return nid
-
-def get_user_chats(uid):
-    try:
-        return supabase.table("chats").select("*").eq("user_id", uid).order("updated_at", desc=True).execute().data
-    except: return []
 
 def delete_chat(cid):
     supabase.table("messages").delete().eq("chat_id", cid).execute()
@@ -113,13 +154,13 @@ def rename_chat(cid, name):
     supabase.table("chats").update({"name": name}).eq("id", cid).execute()
     st.rerun()
 
-# --- 4. AUTENTIZACE ---
+# --- 5. AUTENTIZACE ---
 if "user" not in st.session_state:
     st.title("🧬 S.M.A.R.T. OS 2026")
     t1, t2 = st.tabs(["🔐 Login", "🧬 Register"])
     with t1:
-        e = st.text_input("Email", key="le")
-        p = st.text_input("Heslo", type="password", key="lp")
+        e = st.text_input("Email", key="auth_e")
+        p = st.text_input("Heslo", type="password", key="auth_p")
         if st.button("Connect", use_container_width=True):
             try:
                 r = supabase.auth.sign_in_with_password({"email": e, "password": p})
@@ -129,9 +170,9 @@ if "user" not in st.session_state:
                     st.rerun()
             except: st.error("Access Denied")
     with t2:
-        re = st.text_input("Email")
-        rp = st.text_input("Heslo", type="password")
-        rn = st.text_input("Jméno")
+        re = st.text_input("New Email")
+        rp = st.text_input("New Password", type="password")
+        rn = st.text_input("Display Name")
         if st.button("Initialize Identity"):
             try:
                 supabase.auth.sign_up({"email": re, "password": rp, "options": {"data": {"display_name": rn}}})
@@ -143,182 +184,152 @@ init_session()
 user_id = st.session_state.user.id
 profile = get_profile(user_id)
 display_name = profile.get("display_name")
-current_theme = profile.get("theme", "dark")
-
-# --- 5. UI SYSTEM 2026 ---
-st.markdown(f"""
-    <style>
-    .stApp {{ background-color: {'#050505' if current_theme == 'dark' else '#ffffff'}; }}
-    [data-testid="stSidebar"] {{ background-color: {'#0a0a0a' if current_theme == 'dark' else '#f0f2f6'}; border-right: 1px solid #333; }}
-    </style>
-""", unsafe_allow_html=True)
 
 # --- 6. SIDEBAR ---
 with st.sidebar:
-    st.image(f"https://api.dicebear.com/9.x/dylan/svg?seed={display_name}", width=60)
-    st.markdown(f"**{display_name}**")
-    st.caption("🟢 Online | Gemini 2.5 Kernel")
+    st.image(f"https://api.dicebear.com/9.x/bottts-neutral/svg?seed={display_name}", width=80)
+    st.markdown(f"### {display_name}")
+    st.caption("🟢 Jádro Gemini 2.5 Aktivní")
     
     app_mode = st.radio("Mód systému:", ["💬 Multimodální Chat", "🎙️ Native Voice Mode (2.5)"])
+    use_web_search = st.toggle("🌐 Web Search Retrieval", value=True)
     
     st.divider()
     if st.button("➕ Nový proces", use_container_width=True):
         st.session_state.chat_id = create_chat(user_id)
         st.rerun()
 
-    st.subheader("Archiv")
-    chats = get_user_chats(user_id)
+    st.subheader("Archiv relací")
+    chats = supabase.table("chats").select("*").eq("user_id", user_id).order("updated_at", desc=True).execute().data
     for c in chats:
         c1, c2 = st.columns([0.8, 0.2])
-        if c1.button(c['name'], key=c['id'], use_container_width=True):
+        if c1.button(c['name'], key=f"btn_{c['id']}", use_container_width=True):
             st.session_state.chat_id = c['id']
             st.rerun()
         with c2.popover("⋮"):
-            nn = st.text_input("Název", c['name'], key=f"n_{c['id']}")
-            if st.button("Uložit", key=f"s_{c['id']}"): rename_chat(c['id'], nn)
-            if st.button("Smazat", key=f"d_{c['id']}"): delete_chat(c['id'])
+            nn = st.text_input("Název", c['name'], key=f"rename_{c['id']}")
+            if st.button("Uložit", key=f"save_{c['id']}"): rename_chat(c['id'], nn)
+            if st.button("Smazat", key=f"del_{c['id']}"): delete_chat(c['id'])
             
     st.divider()
-    native_audio = st.toggle("🔊 Hlasová odezva", value=True)
-    
-    if st.button("Odhlásit"):
+    native_audio = st.toggle("🔊 Hlasová syntéza", value=True)
+    if st.button("Odhlásit se"):
         supabase.auth.sign_out()
         st.session_state.clear()
         st.rerun()
 
-# --- 7. MAIN LOGIC ---
+# --- 7. HLAVNÍ ROZHRANÍ ---
 if not st.session_state.get("chat_id"):
     st.session_state.chat_id = chats[0]['id'] if chats else create_chat(user_id)
 
+# Konfigurace Gemini s Vyhledáváním
+genai.configure(api_key=rotate_api_key())
+model_tools = [{"google_search_retrieval": {}}] if use_web_search else None
+model = genai.GenerativeModel(
+    model_name="gemini-2.5-flash", 
+    system_instruction=SMART_SYSTEM_INSTRUCTION,
+    tools=model_tools
+)
+
 # --- MÓD 1: NATIVE VOICE TERMINAL ---
 if app_mode == "🎙️ Native Voice Mode (2.5)":
-    st.title("🎙️ Gemini 2.5 Native Audio")
-    st.info("Režim přímého hlasového dialogu. Žádné psaní, jen čistá konverzace.")
+    st.markdown("<h2 style='text-align: center;'>🎙️ Native Audio Dialog</h2>", unsafe_allow_html=True)
+    st.info("Systém nyní naslouchá přímo vašemu hlasu. Odpověď bude generována nativně.")
     
     cols = st.columns([1, 2, 1])
     with cols[1]:
         v_mic_key = f"v_mic_{st.session_state.v_counter}"
-        voice_in = st.audio_input("Naslouchám...", key=v_mic_key)
+        voice_in = st.audio_input("Klikněte pro mluvení...", key=v_mic_key)
 
     if voice_in and not st.session_state.processing:
         st.session_state.processing = True
-        with st.status("🧠 Gemini 2.5 analyzuje hlas...", expanded=True):
-            genai.configure(api_key=rotate_api_key())
-            model = genai.GenerativeModel("gemini-2.5-flash")
-            
-            audio_payload = process_audio_stream(voice_in.getvalue())
-            response = model.generate_content(audio_payload + ["Jsi S.M.A.R.T. OS. Odpověz stručně, lidsky a přirozeně v češtině."])
-            
+        with st.status("🧠 Gemini analyzuje audio vlny...", expanded=True):
+            audio_payload = [{"mime_type": "audio/wav", "data": voice_in.getvalue()}]
+            response = model.generate_content(audio_payload + ["Odpověz stručně, přirozeně a česky."])
             ai_text = response.text
             st.write(f"🧬 **Gemini:** {ai_text}")
             
-            wait = render_native_audio_dialog(ai_text)
+            wait = render_native_audio_dialog(ai_text) if native_audio else 0
             
-            # Uložení do databáze (záznam konverzace)
+            # Uložení do historie
             supabase.table("messages").insert({
                 "chat_id": st.session_state.chat_id, "role": "assistant", 
-                "content": f"[Voice Mode]: {ai_text}", "user_id": user_id
+                "content": f"[Hlas]: {ai_text}", "user_id": user_id
             }).execute()
             
-            st.session_state.v_counter += 1
-            time.sleep(wait) 
-            st.session_state.processing = False
-            st.rerun()
+            time.sleep(wait)
+        st.session_state.v_counter += 1
+        st.session_state.processing = False
+        st.rerun()
 
-# --- MÓD 2: MULTIMODÁLNÍ CHAT (KOMPLETNÍ) ---
+# --- MÓD 2: MULTIMODÁLNÍ CHAT ---
 else:
-    st.title("💬 Multimodální S.M.A.R.T. Chat")
-    
-    # Kontejner pro plynulé UI
+    st.title("💬 S.M.A.R.T. Intelligence")
     chat_container = st.container()
 
-    with st.expander("📁 Přidat kontext (Obrázky/Dokumenty)"):
+    with st.expander("📁 Multimodální vstup (Obrázky, Dokumenty)"):
         up = st.file_uploader("Nahrát soubor", type=["png","jpg","jpeg","webp","pdf","txt","docx"])
         vis_ctx = process_media(up) if up and up.type.startswith('image') else None
         doc_ctx = extract_text_from_file(up) if up and not up.type.startswith('image') else ""
 
-    # Vykreslení historie z DB
+    # Vykreslení historie
+    try:
+        msgs = supabase.table("messages").select("*").eq("chat_id", st.session_state.chat_id).order("created_at").execute().data
+    except: msgs = []
+
     with chat_container:
-        try:
-            msgs = supabase.table("messages").select("*").eq("chat_id", st.session_state.chat_id).order("created_at").execute().data
-        except: msgs = []
-        
         for m in msgs:
             with st.chat_message(m["role"]): st.markdown(m["content"])
 
-    # Vstupní lišta
-    col_txt, col_mic = st.columns([0.85, 0.15])
-    with col_txt:
-        txt_in = st.chat_input("Napište příkaz nebo otázku...")
-    with col_mic:
-        mic_key = f"mic_{st.session_state.chat_id}_{len(msgs)}"
-        aud_in = st.audio_input("🎙️", key=mic_key)
+    # Vstupy
+    col_t, col_m = st.columns([0.85, 0.15])
+    with col_t: txt_in = st.chat_input("Příkaz pro S.M.A.R.T. OS...")
+    with col_m: aud_in = st.audio_input("🎙️", key=f"chat_mic_{len(msgs)}")
 
-    # Detekce vstupu
+    # Logika detekce vstupu
     final_prompt = None
     audio_data = None
     if not st.session_state.processing:
         if txt_in:
             final_prompt = txt_in
         elif aud_in and aud_in.getvalue() != st.session_state.last_processed_audio:
-            audio_data = process_audio_stream(aud_in.getvalue())
+            audio_data = [{"mime_type": "audio/wav", "data": aud_in.getvalue()}]
             st.session_state.last_processed_audio = aud_in.getvalue()
             final_prompt = "[Hlasová zpráva]"
 
     if final_prompt:
         st.session_state.processing = True
-        
-        # Okamžitý vizuální feedback v kontejneru
         with chat_container:
             with st.chat_message("user"):
                 if audio_data: st.audio(aud_in)
                 else: st.markdown(final_prompt)
         
         # Zápis do DB
-        supabase.table("messages").insert({
-            "chat_id": st.session_state.chat_id, "role": "user", 
-            "content": final_prompt, "user_id": user_id
-        }).execute()
+        supabase.table("messages").insert({"chat_id": st.session_state.chat_id, "role": "user", "content": final_prompt, "user_id": user_id}).execute()
 
-        # AI LOGIKA (Gemini 2.5 Flash)
-        genai.configure(api_key=rotate_api_key())
-        sys_prompt = f"{SMART_SYSTEM_INSTRUCTION}\nUživatel: {display_name}."
-        if doc_ctx: sys_prompt += f"\nEXTRACTED DATA: {doc_ctx[:5000]}"
-
-        model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=sys_prompt)
-        
-        # Sestavení historie pro Gemini
-        history = [{"role": "user" if m["role"]=="user" else "model", "parts": [m["content"]]} for m in msgs]
-        
         with chat_container:
             with st.chat_message("assistant"):
-                with st.spinner("🧬 Synchronizace..."):
-                    try:
-                        payload = audio_data + ["Odpověz v češtině."] if audio_data else [final_prompt]
-                        if vis_ctx: payload.extend(vis_ctx)
-                        
-                        chat_session = model.start_chat(history=history)
-                        response = chat_session.send_message(payload)
-                        ai_out = response.text
-                        
-                        st.markdown(ai_out)
-                        
-                        # Hlasový výstup a synchronizace času
-                        wait_time = 0
-                        if native_audio:
-                            wait_time = render_native_audio_dialog(ai_out)
-                        
-                        # Uložení odpovědi
-                        supabase.table("messages").insert({
-                            "chat_id": st.session_state.chat_id, "role": "assistant", 
-                            "content": ai_out, "user_id": user_id
-                        }).execute()
-                        
-                        # Kritická pauza proti useknutí hlasu
-                        time.sleep(wait_time)
-                        
-                    except Exception as e:
-                        st.error(f"Neural Error: {e}")
+                status_txt = "🌐 Prohledávám web..." if use_web_search else "🧬 Synchronizace..."
+                with st.status(status_txt):
+                    # Historie pro kontext
+                    hist = [{"role": "user" if m["role"]=="user" else "model", "parts": [m["content"]]} for m in msgs]
+                    payload = audio_data + ["Odpověz v CZ."] if audio_data else [final_prompt]
+                    if vis_ctx: payload.extend(vis_ctx)
+                    if doc_ctx: payload.append(f"KONTEXT DOKUMENTU: {doc_ctx[:4000]}")
+                    
+                    chat_session = model.start_chat(history=hist)
+                    response = chat_session.send_message(payload)
+                    ai_reply = response.text
+                
+                st.markdown(ai_reply)
+                
+                # Hlasový výstup
+                wait_time = render_native_audio_dialog(ai_reply) if native_audio else 0
+                
+                # Uložení odpovědi
+                supabase.table("messages").insert({"chat_id": st.session_state.chat_id, "role": "assistant", "content": ai_reply, "user_id": user_id}).execute()
+                
+                time.sleep(wait_time)
 
         st.session_state.processing = False
         st.rerun()
