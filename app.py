@@ -5,6 +5,15 @@ import uuid
 from datetime import datetime
 import time
 import random
+from PIL import Image
+import io
+# Pokusíme se importovat podporu pro HEIC (z iPhone)
+try:
+    from pillow_heif import register_heif_opener
+    register_heif_opener()
+except ImportError:
+    pass
+
 from shared import extract_text_from_file, SMART_SYSTEM_INSTRUCTION
 
 # --- 1. KONFIGURACE STRÁNKY ---
@@ -52,20 +61,28 @@ def rotate_api_key():
         st.stop()
     return random.choice(valid_keys)
 
-# --- 4. AUTENTIZACE (PŘÍMÉ PŘIHLÁŠENÍ BEZ 2FA) ---
+def process_media(uploaded_file):
+    """Připraví obrázek pro Gemini API."""
+    if uploaded_file.type.startswith('image/'):
+        # Pro HEIC a další formáty využijeme Pillow k normalizaci na JPEG/PNG pro jistotu
+        img = Image.open(uploaded_file)
+        img_byte_arr = io.BytesIO()
+        # Převod na RGB, aby se předešlo chybám u průhlednosti/HEIC
+        img.convert("RGB").save(img_byte_arr, format='JPEG')
+        return [{"mime_type": "image/jpeg", "data": img_byte_arr.getvalue()}]
+    return None
+
+# --- 4. AUTENTIZACE ---
 
 if "user" not in st.session_state:
     st.title("🤖 S.M.A.R.T. OS")
-    
     tab1, tab2 = st.tabs(["🔐 Přihlášení", "✨ Vytvořit účet"])
     
     with tab1:
         email = st.text_input("Email", key="log_email")
         password = st.text_input("Heslo", type="password", key="log_pass")
-        
         if st.button("Vstoupit do systému", use_container_width=True):
             try:
-                # PŘÍMÉ PŘIHLÁŠENÍ: Heslo OK -> Uživatel je vpuštěn
                 res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                 if res.user:
                     st.session_state.user = res.user
@@ -81,7 +98,6 @@ if "user" not in st.session_state:
         reg_pass = st.text_input("Heslo", type="password")
         if st.button("Zaregistrovat se", use_container_width=True):
             try:
-                # Při registraci vypni v Supabase "Confirm Email", aby se mohl hned přihlásit
                 res = supabase.auth.sign_up({
                     "email": reg_email, 
                     "password": reg_pass,
@@ -92,7 +108,6 @@ if "user" not in st.session_state:
                 st.error(f"Chyba: {e}")
     st.stop()
 
-# --- HLAVNÍ ROZHRANÍ PRO PŘIHLÁŠENÉ ---
 init_session()
 user_id = st.session_state.user.id
 profile = get_profile(user_id)
@@ -112,9 +127,8 @@ with st.sidebar:
     avatar_url = f"https://api.dicebear.com/7.x/bottts/svg?seed={display_name}"
     st.image(avatar_url, width=100)
     st.markdown(f"### {display_name}")
-    st.caption("🛡️ S.M.A.R.T. OS | Gemini 2.0 Flash")
+    st.caption("🛡️ Multimodální S.M.A.R.T. OS")
     
-    st.divider()
     if st.button("💬 Chat", use_container_width=True):
         st.session_state.page = "chat"
         st.rerun()
@@ -123,9 +137,21 @@ with st.sidebar:
         st.rerun()
 
     st.divider()
-    st.subheader("📁 Dokumenty")
-    uploaded_file = st.file_uploader("Analyzovat soubor", type=["pdf", "docx", "txt"])
-    doc_context = extract_text_from_file(uploaded_file) if uploaded_file else ""
+    st.subheader("📁 Nahrát data")
+    # Rozšířená podpora pro obrázky i dokumenty
+    uploaded_file = st.file_uploader("Analyzovat soubor nebo foto", 
+                                   type=["pdf", "docx", "txt", "png", "jpg", "jpeg", "webp", "heic"])
+    
+    doc_context = ""
+    visual_context = None
+
+    if uploaded_file:
+        if uploaded_file.type.startswith('image/'):
+            visual_context = process_media(uploaded_file)
+            st.image(uploaded_file, caption="Vizuální paměť aktivní", use_container_width=True)
+        else:
+            doc_context = extract_text_from_file(uploaded_file)
+            if doc_context: st.success("Dokument načten!")
 
     st.divider()
     if st.button("🚪 Odhlásit se", use_container_width=True):
@@ -159,11 +185,10 @@ if st.session_state.get("page") == "settings":
             st.rerun()
 
 else:
-    # --- CHAT SEKCE ---
     if "chat_id" not in st.session_state:
         st.session_state.chat_id = str(uuid.uuid4())[:8]
 
-    st.title("💬 Chatovací konzole")
+    st.title("💬 S.M.A.R.T. Chat")
     
     try:
         msgs = supabase.table("messages").select("*").eq("chat_id", st.session_state.chat_id).order("created_at").execute().data
@@ -172,11 +197,10 @@ else:
     for m in msgs:
         with st.chat_message(m["role"]): st.markdown(m["content"])
 
-    if prompt := st.chat_input("Napište příkaz..."):
+    if prompt := st.chat_input("Napište zprávu nebo popište obrázek..."):
         st.chat_message("user").markdown(prompt)
         supabase.table("messages").insert({"chat_id": st.session_state.chat_id, "role": "user", "content": prompt, "user_id": user_id}).execute()
 
-        # AI LOGIKA (Rotace klíčů)
         genai.configure(api_key=rotate_api_key())
         len_prompt = {"Krátká": "stručný", "Střední": "vyvážený", "Dlouhá": "velmi detailní"}.get(profile.get("response_length"), "vyvážený")
 
@@ -187,19 +211,28 @@ else:
         Styl: {len_prompt}.
         """
         if doc_context:
-            final_system_prompt += f"\n\nKONTEXT ZE SOUBORU:\n{doc_context[:20000]}"
+            final_system_prompt += f"\n\nKONTEXT ZE SOUBORU:\n{doc_context[:15000]}"
 
-        # Model Gemini 2.0 Flash
-        model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=final_system_prompt)
+        # Model Gemini 2.0 Flash (experimentální verze pro nejlepší výkon)
+        model = genai.GenerativeModel("gemini-3-flash", system_instruction=final_system_prompt)
+        
+        # Příprava historie pro model
         gem_hist = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in msgs]
         
-        with st.spinner("🚀 Generuji odpověď..."):
+        with st.spinner("🚀 Analyzuji..."):
             try:
+                # Sestavení zprávy s multimédii
+                message_parts = [prompt]
+                if visual_context:
+                    message_parts.extend(visual_context)
+                
+                # Pro multimodální vstup (obrázky) je lepší použít generate_content přímo 
+                # nebo přidat obrázek do prvního parts v rámci historie.
                 chat = model.start_chat(history=gem_hist)
-                response = chat.send_message(prompt)
+                response = chat.send_message(message_parts)
                 ai_text = response.text
             except Exception as e:
-                ai_text = f"Chyba: {e}"
+                ai_text = f"Chyba AI: {e}"
 
         with st.chat_message("assistant"): st.markdown(ai_text)
         supabase.table("messages").insert({"chat_id": st.session_state.chat_id, "role": "assistant", "content": ai_text, "user_id": user_id}).execute()
