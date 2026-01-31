@@ -81,14 +81,19 @@ if "user" not in st.session_state:
         
         if st.button("Zaregistrovat se", use_container_width=True):
             try:
-                # Registrace
-                res = supabase.auth.sign_up({"email": reg_email, "password": reg_pass})
+                # UPRAVENO: Posíláme jméno v datech (options)
+                res = supabase.auth.sign_up({
+                    "email": reg_email, 
+                    "password": reg_pass,
+                    "options": {
+                        "data": {"display_name": reg_name}
+                    }
+                })
+                
+                # ZDE JSME SMAZALI RUČNÍ INSERT DO PROFILES
+                # O vše se postará Trigger v databázi.
+                
                 if res.user:
-                    # Vytvoření profilu
-                    supabase.table("profiles").insert({
-                        "id": res.user.id, 
-                        "display_name": reg_name
-                    }).execute()
                     st.success("Účet vytvořen! Nyní se přihlaste v první záložce.")
             except Exception as e:
                 st.error(f"Chyba registrace: {e}")
