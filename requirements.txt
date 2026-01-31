@@ -1,5 +1,6 @@
 streamlit
 google-generativeai
 supabase
-pypdf
-python-docx
+pillow
+pillow-heif
+gTTS
