@@ -127,16 +127,25 @@ def process_media(uploaded_file):
     return None
 
 def render_native_audio_dialog(text_response):
-    """Zajišťuje plynulý hlasový výstup bez přerušení."""
+    """OPRAVENO: Generuje hlas a dynamicky počítá čas pro dočtení CELÉ zprávy."""
     try:
         tts = gTTS(text=text_response, lang='cs')
         fp = io.BytesIO()
         tts.write_to_fp(fp)
         fp.seek(0)
         b64 = base64.b64encode(fp.read()).decode()
+        
+        # Vložení audio elementu
         st.markdown(f'<audio autoplay style="display:none;"><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>', unsafe_allow_html=True)
-        return min(len(text_response) * 0.08, 12.0) # Čas na dočtení
-    except: return 0
+        
+        # DYNAMICKÝ VÝPOČET ČASU: 
+        # Průměrná rychlost řeči je cca 150 slov za minutu -> cca 0.4s na slovo. 
+        # Přidáváme rezervu pro interpunkci.
+        words_count = len(text_response.split())
+        estimated_seconds = (words_count * 0.5) + 1.5 
+        return estimated_seconds
+    except:
+        return 0
 
 # --- 4. SPRÁVA CHATŮ ---
 def create_chat(uid):
@@ -156,8 +165,8 @@ def rename_chat(cid, name):
 
 # --- 5. AUTENTIZACE ---
 if "user" not in st.session_state:
-    st.title("🧬 S.M.A.R.T. OS 2026")
-    t1, t2 = st.tabs(["🔐 Login", "🧬 Register"])
+    st.title("S.M.A.R.T. OS Beta")
+    t1, t2 = st.tabs(["Přihlásit se", "Zaregistrovat se"])
     with t1:
         e = st.text_input("Email", key="auth_e")
         p = st.text_input("Heslo", type="password", key="auth_p")
@@ -170,10 +179,10 @@ if "user" not in st.session_state:
                     st.rerun()
             except: st.error("Zadali jste špatně Email nebo heslo.")
     with t2:
-        re = st.text_input("New Email")
-        rp = st.text_input("New Password", type="password")
-        rn = st.text_input("Display Name")
-        if st.button("Initialize Identity"):
+        re = st.text_input("Nový Email")
+        rp = st.text_input("Nové heslo", type="password")
+        rn = st.text_input("Jméno (Přezdívka)")
+        if st.button("Zaregistrovat"):
             try:
                 supabase.auth.sign_up({"email": re, "password": rp, "options": {"data": {"display_name": rn}}})
                 st.success("Účrt vytvořen. Nyní se vraťte do záložky Přihlásit se a přihlašte se.")
@@ -231,33 +240,52 @@ model = genai.GenerativeModel(
     tools=model_tools
 )
 
-# --- MÓD 1: NATIVE VOICE TERMINAL ---
-if app_mode == "Hlasový režim (2.5)":
+# --- MÓD 1: NATIVE VOICE TERMINAL (Opraveno) ---
+# Důležité: String v podmínce musí přesně sedět na název v radio buttonu v sidebaru
+if app_mode == "Hlasový režim(2.5)":
     st.markdown("<h2 style='text-align: center;'>Hlasový režim</h2>", unsafe_allow_html=True)
-    st.info("Klikněte na ikonku mikrofonu a začněte mluvit.")
+    st.info("Klikněte na mikrofon a začněte mluvit.")
     
     cols = st.columns([1, 2, 1])
     with cols[1]:
+        # Používáme v_counter, aby se mikrofon po každé odpovědi vyresetoval
         v_mic_key = f"v_mic_{st.session_state.v_counter}"
-        voice_in = st.audio_input("Klikněte pro mluvení...", key=v_mic_key)
+        voice_in = st.audio_input("Poslouchám...", key=v_mic_key)
 
     if voice_in and not st.session_state.processing:
         st.session_state.processing = True
-        with st.status("Smart analyzuje audio...", expanded=True):
-            audio_payload = [{"mime_type": "audio/wav", "data": voice_in.getvalue()}]
-            response = model.generate_content(audio_payload + ["Odpověz stručně, přirozeně a česky."])
-            ai_text = response.text
-            st.write(f"🧬 **Smart:** {ai_text}")
-            
-            wait = render_native_audio_dialog(ai_text) if native_audio else 0
-            
-            # Uložení do historie
-            supabase.table("messages").insert({
-                "chat_id": st.session_state.chat_id, "role": "assistant", 
-                "content": f"[Hlas]: {ai_text}", "user_id": user_id
-            }).execute()
-            
-            time.sleep(wait)
+        
+        # Animovaný status bar z našeho nového UI
+        with st.status("Přemýšlím...", expanded=True):
+            try:
+                # Příprava dat pro Gemini
+                audio_payload = [{"mime_type": "audio/wav", "data": voice_in.getvalue()}]
+                
+                # Generování odpovědi (model už máš definovaný výše s vyhledáváním)
+                response = model.generate_content(audio_payload + ["Jsi S.M.A.R.T. OS. Odpověz stručně, přirozeně a česky."])
+                ai_text = response.text
+                
+                # Zobrazení odpovědi
+                st.write(f" **S.M.A.R.T.:** {ai_text}")
+                
+                # HLASOVÝ VÝSTUP (Teď už s tvým novým opravným čekáním)
+                wait = render_native_audio_dialog(ai_text) if native_audio else 0
+                
+                # Uložení do databáze
+                supabase.table("messages").insert({
+                    "chat_id": st.session_state.chat_id, 
+                    "role": "assistant", 
+                    "content": f"[Voice Mode]: {ai_text}", 
+                    "user_id": user_id
+                }).execute()
+                
+                # Klíčová pauza, aby dozněl hlas, než se zavře status a udělá rerun
+                time.sleep(wait)
+                
+            except Exception as e:
+                st.error(f"Chyba hlasového modulu: {e}")
+        
+        # Posuneme counter pro reset mikrofonu a uvolníme zámek processing
         st.session_state.v_counter += 1
         st.session_state.processing = False
         st.rerun()
