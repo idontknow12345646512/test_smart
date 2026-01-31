@@ -52,7 +52,7 @@ def rotate_api_key():
         st.stop()
     return random.choice(valid_keys)
 
-# --- 4. AUTENTIZACE (2FA LOGIKA) ---
+# --- 4. AUTENTIZACE (2FA LOGIKA - ČISTÉ OTP) ---
 
 if "user" not in st.session_state:
     st.title("🤖 S.M.A.R.T. OS")
@@ -66,9 +66,10 @@ if "user" not in st.session_state:
             
             if st.button("Pokračovat", use_container_width=True):
                 try:
+                    # 1. Ověření hesla
                     res = supabase.auth.sign_in_with_password({"email": email, "password": password})
                     if res.user:
-                        # Heslo OK -> Pošleme kód
+                        # 2. Požadavek na OTP (v šabloně v Supabase musí být {{ .Token }})
                         supabase.auth.sign_in_with_otp({"email": email})
                         st.session_state.step_2fa = True
                         st.session_state.temp_email = email
@@ -76,13 +77,15 @@ if "user" not in st.session_state:
                 except Exception:
                     st.error("Nesprávný email nebo heslo.")
         else:
-            st.info(f"🛡️ Zadejte 2FA kód zaslaný na e-mail: {st.session_state.temp_email}")
-            otp_code = st.text_input("6-místný kód", placeholder="123456")
+            # 3. Zadání kódu přímo v aplikaci
+            st.info(f"🛡️ Do e-mailu {st.session_state.temp_email} vám přišel 6místný kód.")
+            otp_code = st.text_input("Zadejte kód", placeholder="123456", max_chars=6)
             
             c1, c2 = st.columns(2)
             with c1:
                 if st.button("Ověřit a vstoupit", type="primary", use_container_width=True):
                     try:
+                        # Verifikace pomocí kódu (Tokenu)
                         res = supabase.auth.verify_otp({
                             "email": st.session_state.temp_email,
                             "token": otp_code,
@@ -94,7 +97,7 @@ if "user" not in st.session_state:
                             del st.session_state.step_2fa
                             st.rerun()
                     except:
-                        st.error("Neplatný kód.")
+                        st.error("Neplatný nebo vypršený kód.")
             with c2:
                 if st.button("Zpět", use_container_width=True):
                     del st.session_state.step_2fa
@@ -133,11 +136,10 @@ st.markdown(f"""
 
 # --- 6. SIDEBAR ---
 with st.sidebar:
-    # Profi vzhled účtu
     avatar_url = f"https://api.dicebear.com/7.x/bottts/svg?seed={display_name}"
     st.image(avatar_url, width=100)
     st.markdown(f"### {display_name}")
-    st.caption("🛡️ Zabezpečeno 2FA | Gemini 2.5 Flash")
+    st.caption("🛡️ Zabezpečeno 2FA | Gemini 2.0 Flash")
     
     st.divider()
     
@@ -189,13 +191,11 @@ if st.session_state.get("page") == "settings":
             st.rerun()
 
 else:
-    # --- CHAT SEKCE ---
     if "chat_id" not in st.session_state:
         st.session_state.chat_id = str(uuid.uuid4())[:8]
 
     st.title("💬 S.M.A.R.T. Chat")
     
-    # Načtení historie
     try:
         msgs = supabase.table("messages").select("*").eq("chat_id", st.session_state.chat_id).order("created_at").execute().data
     except: msgs = []
@@ -207,13 +207,11 @@ else:
         st.chat_message("user").markdown(prompt)
         supabase.table("messages").insert({"chat_id": st.session_state.chat_id, "role": "user", "content": prompt, "user_id": user_id}).execute()
 
-        # Konfigurace AI (Rotace 10 klíčů)
         genai.configure(api_key=rotate_api_key())
         
         len_map = {"Krátká": "stručný", "Střední": "vyvážený", "Dlouhá": "velmi detailní"}
         len_prompt = len_map.get(profile.get("response_length"), "střední")
 
-        # Finální systémový prompt (Kombinace shared.py a profilu)
         final_system_prompt = f"""
         {SMART_SYSTEM_INSTRUCTION}
         Uživatele oslovuj: {display_name}.
@@ -224,10 +222,9 @@ else:
         if doc_context:
             final_system_prompt += f"\n\nKONTEXT Z NAHRANÉHO SOUBORU (Prioritizuj toto):\n{doc_context[:20000]}"
 
-        # Model Gemini 2.5 Flash
+        # Model Gemini 2.0 Flash (Experimentální verze)
         model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=final_system_prompt)
         
-        # Konverze historie
         gem_hist = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in msgs]
         
         with st.spinner("S.M.A.R.T. OS přemýšlí..."):
