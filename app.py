@@ -161,14 +161,14 @@ if "user" not in st.session_state:
     with t1:
         e = st.text_input("Email", key="auth_e")
         p = st.text_input("Heslo", type="password", key="auth_p")
-        if st.button("Connect", use_container_width=True):
+        if st.button("Přihlásit se", use_container_width=True):
             try:
                 r = supabase.auth.sign_in_with_password({"email": e, "password": p})
                 if r.user:
                     st.session_state.user = r.user
                     st.session_state.session = r.session
                     st.rerun()
-            except: st.error("Access Denied")
+            except: st.error("Zadali jste špatně Email nebo heslo.")
     with t2:
         re = st.text_input("New Email")
         rp = st.text_input("New Password", type="password")
@@ -176,7 +176,7 @@ if "user" not in st.session_state:
         if st.button("Initialize Identity"):
             try:
                 supabase.auth.sign_up({"email": re, "password": rp, "options": {"data": {"display_name": rn}}})
-                st.success("Identity Created")
+                st.success("Účrt vytvořen. Nyní se vraťte do záložky Přihlásit se a přihlašte se.")
             except Exception as x: st.error(x)
     st.stop()
 
@@ -189,17 +189,17 @@ display_name = profile.get("display_name")
 with st.sidebar:
     st.image(f"https://api.dicebear.com/9.x/bottts-neutral/svg?seed={display_name}", width=80)
     st.markdown(f"### {display_name}")
-    st.caption("🟢 Jádro Gemini 2.5 Aktivní")
+    st.caption("Gemini 2.5")
     
-    app_mode = st.radio("Mód systému:", ["💬 Multimodální Chat", "🎙️ Native Voice Mode (2.5)"])
-    use_web_search = st.toggle("🌐 Web Search Retrieval", value=True)
+    app_mode = st.radio("Režim", ["Chat", "Hlasový režim (2.5)"])
+    use_web_search = st.toggle("Vyhledávání na iternetu", value=False)
     
     st.divider()
-    if st.button("➕ Nový proces", use_container_width=True):
+    if st.button("Nový chat", use_container_width=True):
         st.session_state.chat_id = create_chat(user_id)
         st.rerun()
 
-    st.subheader("Archiv relací")
+    st.subheader("Historie chatů")
     chats = supabase.table("chats").select("*").eq("user_id", user_id).order("updated_at", desc=True).execute().data
     for c in chats:
         c1, c2 = st.columns([0.8, 0.2])
@@ -212,7 +212,7 @@ with st.sidebar:
             if st.button("Smazat", key=f"del_{c['id']}"): delete_chat(c['id'])
             
     st.divider()
-    native_audio = st.toggle("🔊 Hlasová syntéza", value=True)
+    native_audio = st.toggle("Číst zprávy nahlas", value=False)
     if st.button("Odhlásit se"):
         supabase.auth.sign_out()
         st.session_state.clear()
@@ -232,9 +232,9 @@ model = genai.GenerativeModel(
 )
 
 # --- MÓD 1: NATIVE VOICE TERMINAL ---
-if app_mode == "🎙️ Native Voice Mode (2.5)":
-    st.markdown("<h2 style='text-align: center;'>🎙️ Native Audio Dialog</h2>", unsafe_allow_html=True)
-    st.info("Systém nyní naslouchá přímo vašemu hlasu. Odpověď bude generována nativně.")
+if app_mode == "Hlasový režim (2.5)":
+    st.markdown("<h2 style='text-align: center;'>Hlasový režim</h2>", unsafe_allow_html=True)
+    st.info("Klikněte na ikonku mikrofonu a začněte mluvit.")
     
     cols = st.columns([1, 2, 1])
     with cols[1]:
@@ -243,11 +243,11 @@ if app_mode == "🎙️ Native Voice Mode (2.5)":
 
     if voice_in and not st.session_state.processing:
         st.session_state.processing = True
-        with st.status("🧠 Gemini analyzuje audio vlny...", expanded=True):
+        with st.status("Smart analyzuje audio...", expanded=True):
             audio_payload = [{"mime_type": "audio/wav", "data": voice_in.getvalue()}]
             response = model.generate_content(audio_payload + ["Odpověz stručně, přirozeně a česky."])
             ai_text = response.text
-            st.write(f"🧬 **Gemini:** {ai_text}")
+            st.write(f"🧬 **Smart:** {ai_text}")
             
             wait = render_native_audio_dialog(ai_text) if native_audio else 0
             
@@ -264,10 +264,10 @@ if app_mode == "🎙️ Native Voice Mode (2.5)":
 
 # --- MÓD 2: MULTIMODÁLNÍ CHAT ---
 else:
-    st.title("💬 S.M.A.R.T. Intelligence")
+    st.title("Smart AI")
     chat_container = st.container()
 
-    with st.expander("📁 Multimodální vstup (Obrázky, Dokumenty)"):
+    with st.expander("Nahrajte soubory, obrázky"):
         up = st.file_uploader("Nahrát soubor", type=["png","jpg","jpeg","webp","pdf","txt","docx"])
         vis_ctx = process_media(up) if up and up.type.startswith('image') else None
         doc_ctx = extract_text_from_file(up) if up and not up.type.startswith('image') else ""
@@ -283,8 +283,8 @@ else:
 
     # Vstupy
     col_t, col_m = st.columns([0.85, 0.15])
-    with col_t: txt_in = st.chat_input("Příkaz pro S.M.A.R.T. OS...")
-    with col_m: aud_in = st.audio_input("🎙️", key=f"chat_mic_{len(msgs)}")
+    with col_t: txt_in = st.chat_input("Napište zprávu...")
+    with col_m: aud_in = st.audio_input("", key=f"chat_mic_{len(msgs)}")
 
     # Logika detekce vstupu
     final_prompt = None
@@ -309,7 +309,7 @@ else:
 
         with chat_container:
             with st.chat_message("assistant"):
-                status_txt = "🌐 Prohledávám web..." if use_web_search else "🧬 Synchronizace..."
+                status_txt = "Prohledávám web..." if use_web_search else "Přemýšlím..."
                 with st.status(status_txt):
                     # Historie pro kontext
                     hist = [{"role": "user" if m["role"]=="user" else "model", "parts": [m["content"]]} for m in msgs]
