@@ -78,8 +78,8 @@ if "user" not in st.session_state:
                     st.error("Nesprávný email nebo heslo.")
         else:
             # 3. Zadání kódu přímo v aplikaci
-            st.info(f"🛡️ Do e-mailu {st.session_state.temp_email} vám přišel 6místný kód.")
-            otp_code = st.text_input("Zadejte kód", placeholder="123456", max_chars=6)
+            st.info(f"🛡️ Do e-mailu {st.session_state.temp_email} vám přišel 8místný kód.")
+            otp_code = st.text_input("Zadejte kód", placeholder="12345678", max_chars=8)
             
             c1, c2 = st.columns(2)
             with c1:
