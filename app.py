@@ -401,42 +401,67 @@ else:
             "content": final_query, "user_id": user_id
         }).execute()
 
-        # AI Odpověď
         with chat_win:
             with st.chat_message("assistant"):
-                status_text = "🌐 Prohledávám web..." if web_search_enabled else "🧬 Synchronizace..."
-                with st.status(status_text):
-                    # Sestavení historie pro Gemini (nezkrácené)
-                    gemini_history = []
-                    for msg in messages[-10:]: # Posledních 10 zpráv pro kontext
-                        role = "user" if msg["role"] == "user" else "model"
-                        gemini_history.append({"role": role, "parts": [msg["content"]]})
-                    
-                    # Příprava payloadu
-                    current_payload = audio_data + ["Odpověz česky."] if audio_data else [final_query]
-                    if media_ctx: current_payload.extend(media_ctx)
-                    if doc_ctx: current_payload.append(f"KONTEXT DOKUMENTU: {doc_ctx[:5000]}")
-                    
-                    # Spuštění chatu
-                    chat_session = model.start_chat(history=gemini_history)
-                    response = chat_session.send_message(current_payload)
-                    ai_response_text = response.text
+                label = "🌐 Prohledávám web..." if web_search_enabled else "🧬 Jádro..."
                 
+                # Všechna AI logika probíhá uvnitř statusu
+                with st.status(label) as status:
+                    # 1. PŘÍPRAVA HISTORIE
+                    gemini_history = []
+                    for msg in messages[-10:]:
+                        clean_content = str(msg["content"])
+                        role = "user" if msg["role"] == "user" else "model"
+                        gemini_history.append({"role": role, "parts": [clean_content]})
+                    
+                    # 2. PŘÍPRAVA PAYLOADU
+                    current_payload = []
+                    if audio_data:
+                        current_payload.extend(audio_data)
+                        current_payload.append("Toto je hlasová zpráva, odpověz na ni česky.")
+                    else:
+                        current_payload.append(final_query)
+                    
+                    if media_ctx:
+                        current_payload.extend(media_ctx)
+                    
+                    if doc_ctx:
+                        current_payload.append(f"\nKONTEXT Z DOKUMENTU: {doc_ctx[:3000]}")
+
+                    # 3. SAMOTNÉ GENEROVÁNÍ
+                    try:
+                        chat_session = model.start_chat(history=gemini_history)
+                        response = chat_session.send_message(current_payload)
+                        ai_response_text = response.text
+                    except Exception as e:
+                        st.warning("Nouzový protokol aktivován...")
+                        response = model.generate_content([final_query])
+                        ai_response_text = response.text
+                    
+                    status.update(label="🧬 Odpověď vygenerována", state="complete")
+
+                # --- VÝSTUP (Mimo status, aby to uživatel hned viděl) ---
                 st.markdown(ai_response_text)
                 
-                # Zvuková syntéza (pokud je aktivní)
+                # Zvuková syntéza
                 wait_seconds = 0
                 if voice_output_enabled:
                     wait_seconds = render_native_audio_dialog(ai_response_text)
                 
-                # DB zápis odpovědi
-                supabase.table("messages").insert({
-                    "chat_id": st.session_state.chat_id, "role": "assistant", 
-                    "content": ai_response_text, "user_id": user_id
-                }).execute()
+                # DB zápis odpovědi (Důležité: až když máme text)
+                try:
+                    supabase.table("messages").insert({
+                        "chat_id": st.session_state.chat_id, 
+                        "role": "assistant", 
+                        "content": ai_response_text, 
+                        "user_id": user_id
+                    }).execute()
+                except Exception as db_err:
+                    st.error(f"Chyba zápisu do DB: {db_err}")
                 
-                # Počkáme na doznění hlasu
+                # Počkáme na doznění hlasu, než se stránka refreshne
                 time.sleep(wait_seconds)
 
+        # Reset stavu a obnova stránky
         st.session_state.processing = False
         st.rerun()
