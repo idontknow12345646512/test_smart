@@ -190,7 +190,7 @@ else:
             final_system_prompt += f"\n\nKONTEXT ZE SOUBORU:\n{doc_context[:20000]}"
 
         # Model Gemini 2.0 Flash
-        model = genai.GenerativeModel("gemini-2.0-flash-exp", system_instruction=final_system_prompt)
+        model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=final_system_prompt)
         gem_hist = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in msgs]
         
         with st.spinner("🚀 Generuji odpověď..."):
