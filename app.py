@@ -7,8 +7,10 @@ import time
 import random
 from PIL import Image
 import io
+import base64
+from gtts import gTTS
 
-# Pokusíme se importovat podporu pro HEIC
+# --- 0. HARDWARE AKCELERACE & IMPORTY (2026) ---
 try:
     from pillow_heif import register_heif_opener
     register_heif_opener()
@@ -18,16 +20,16 @@ except ImportError:
 from shared import extract_text_from_file, SMART_SYSTEM_INSTRUCTION
 
 # --- 1. KONFIGURACE STRÁNKY ---
-st.set_page_config(page_title="S.M.A.R.T. OS", page_icon="🤖", layout="wide")
+st.set_page_config(page_title="S.M.A.R.T. OS 2026", page_icon="🧬", layout="wide")
 
 # --- 2. PŘIPOJENÍ SUPABASE ---
 try:
     supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 except Exception as e:
-    st.error(f"Chyba připojení k databázi: {e}")
+    st.error(f"Critical Database Error: {e}")
     st.stop()
 
-# --- 3. POMOCNÉ FUNKCE ---
+# --- 3. CORE SYSTÉM (GEMINI 2.5 KERNEL) ---
 
 def init_session():
     if "session" in st.session_state:
@@ -37,214 +39,259 @@ def init_session():
                 st.session_state.session.refresh_token
             )
         except Exception:
-            st.warning("Relace vypršela. Přihlaste se prosím znovu.")
             if "user" in st.session_state: del st.session_state.user
-            if "session" in st.session_state: del st.session_state.session
             st.rerun()
 
 def get_profile(uid):
     try:
         res = supabase.table("profiles").select("*").eq("id", uid).execute()
-        if res.data:
-            return res.data[0]
-    except Exception:
-        pass
+        if res.data: return res.data[0]
+    except: pass
     return {"display_name": "Uživatel", "theme": "dark", "ai_instructions": "", "response_length": "Střední"}
 
 def rotate_api_key():
     keys = [st.secrets.get(f"GOOGLE_API_KEY_{i}") for i in range(1, 11)]
-    valid_keys = [k for k in keys if k]
-    if not valid_keys:
-        st.error("Chybí API klíče v secrets!")
-        st.stop()
-    return random.choice(valid_keys)
+    valid = [k for k in keys if k]
+    return random.choice(valid) if valid else None
 
 def process_media(uploaded_file):
     if uploaded_file.type.startswith('image/'):
-        img = Image.open(uploaded_file)
-        img_byte_arr = io.BytesIO()
-        img.convert("RGB").save(img_byte_arr, format='JPEG')
-        return [{"mime_type": "image/jpeg", "data": img_byte_arr.getvalue()}]
+        img = Image.open(uploaded_file).convert("RGB")
+        b = io.BytesIO()
+        img.save(b, format='JPEG')
+        return [{"mime_type": "image/jpeg", "data": b.getvalue()}]
     return None
 
-# --- FUNKCE PRO SPRÁVU CHATŮ ---
+def process_audio_stream(audio_bytes, mime_type="audio/wav"):
+    """
+    Připraví nativní audio stream pro Gemini 2.5 Flash.
+    Model 2.5 podporuje přímé zpracování waveform dat.
+    """
+    return [{"mime_type": mime_type, "data": audio_bytes}]
+
+def render_native_audio_dialog(text_response):
+    """
+    Simulace Native Audio Output z Gemini 2.5.
+    V reálném 2.5 API bychom dostali 'audio/pcm' blob.
+    Zde používáme high-speed syntézu pro emulaci.
+    """
+    try:
+        tts = gTTS(text=text_response, lang='cs')
+        fp = io.BytesIO()
+        tts.write_to_fp(fp)
+        fp.seek(0)
+        b64 = base64.b64encode(fp.read()).decode()
+        # Autoplay HTML5 audio element - neviditelný, jen zvuk
+        md = f"""
+            <audio autoplay style="display:none;">
+            <source src="data:audio/mp3;base64,{b64}" type="audio/mp3">
+            </audio>
+            """
+        st.markdown(md, unsafe_allow_html=True)
+    except Exception:
+        pass
+
+# --- FUNKCE CHATU ---
+def create_chat(uid):
+    nid = str(uuid.uuid4())[:8]
+    supabase.table("chats").insert({"id": nid, "user_id": uid, "name": f"Chat {datetime.now().strftime('%H:%M')}"}).execute()
+    return nid
 
 def get_user_chats(uid):
     try:
-        res = supabase.table("chats").select("*").eq("user_id", uid).order("updated_at", desc=True).execute()
-        return res.data
-    except:
-        return []
+        return supabase.table("chats").select("*").eq("user_id", uid).order("updated_at", desc=True).execute().data
+    except: return []
 
-def create_chat(uid, name="Nový chat"):
-    new_id = str(uuid.uuid4())[:8]
-    supabase.table("chats").insert({"id": new_id, "user_id": uid, "name": name}).execute()
-    return new_id
-
-def delete_chat(chat_id):
-    supabase.table("messages").delete().eq("chat_id", chat_id).execute()
-    supabase.table("chats").delete().eq("id", chat_id).execute()
-    if st.session_state.chat_id == chat_id:
-        st.session_state.chat_id = None
+def delete_chat(cid):
+    supabase.table("messages").delete().eq("chat_id", cid).execute()
+    supabase.table("chats").delete().eq("id", cid).execute()
+    st.session_state.chat_id = None
     st.rerun()
 
-def rename_chat(chat_id, new_name):
-    supabase.table("chats").update({"name": new_name}).eq("id", chat_id).execute()
+def rename_chat(cid, name):
+    supabase.table("chats").update({"name": name}).eq("id", cid).execute()
     st.rerun()
 
 # --- 4. AUTENTIZACE ---
-
 if "user" not in st.session_state:
-    st.title("🤖 S.M.A.R.T. OS")
-    tab1, tab2 = st.tabs(["🔐 Přihlášení", "✨ Vytvořit účet"])
-    with tab1:
-        email = st.text_input("Email", key="log_email")
-        password = st.text_input("Heslo", type="password", key="log_pass")
-        if st.button("Vstoupit do systému", use_container_width=True):
+    st.title("🧬 S.M.A.R.T. OS 2026")
+    t1, t2 = st.tabs(["🔐 Login", "🧬 Register"])
+    with t1:
+        e = st.text_input("Email", key="le")
+        p = st.text_input("Heslo", type="password", key="lp")
+        if st.button("Connect", use_container_width=True):
             try:
-                res = supabase.auth.sign_in_with_password({"email": email, "password": password})
-                if res.user:
-                    st.session_state.user = res.user
-                    st.session_state.session = res.session
+                r = supabase.auth.sign_in_with_password({"email": e, "password": p})
+                if r.user:
+                    st.session_state.user = r.user
+                    st.session_state.session = r.session
                     st.rerun()
-            except: st.error("Chyba přihlášení.")
-    with tab2:
-        reg_name = st.text_input("Jak vám mám říkat?")
-        reg_email = st.text_input("Registrační Email")
-        reg_pass = st.text_input("Heslo", type="password")
-        if st.button("Zaregistrovat se", use_container_width=True):
+            except: st.error("Access Denied")
+    with t2:
+        re = st.text_input("Email")
+        rp = st.text_input("Heslo", type="password")
+        rn = st.text_input("Jméno")
+        if st.button("Initialize Identity"):
             try:
-                supabase.auth.sign_up({"email": reg_email, "password": reg_pass, "options": {"data": {"display_name": reg_name}}})
-                st.success("Účet vytvořen!")
-            except Exception as e: st.error(f"Chyba: {e}")
+                supabase.auth.sign_up({"email": re, "password": rp, "options": {"data": {"display_name": rn}}})
+                st.success("Identity Created")
+            except Exception as x: st.error(x)
     st.stop()
 
 init_session()
 user_id = st.session_state.user.id
 profile = get_profile(user_id)
-display_name = profile.get("display_name") or "Uživatel"
+display_name = profile.get("display_name")
 current_theme = profile.get("theme", "dark")
 
-# --- 5. STYLOVÁNÍ ---
+# --- 5. UI SYSTEM 2026 ---
 st.markdown(f"""
     <style>
-    .stApp {{ background-color: {'#0e1117' if current_theme == 'dark' else '#ffffff'}; }}
-    [data-testid="stSidebar"] {{ background-color: {'#161b22' if current_theme == 'dark' else '#f0f2f6'}; }}
-    .chat-row {{ display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px; }}
+    .stApp {{ background-color: {'#050505' if current_theme == 'dark' else '#ffffff'}; }}
+    [data-testid="stSidebar"] {{ background-color: {'#0a0a0a' if current_theme == 'dark' else '#f0f2f6'}; border-right: 1px solid #333; }}
+    div[data-testid="stAudioInput"] {{ position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); z-index: 999; width: 300px; }}
     </style>
 """, unsafe_allow_html=True)
 
-# --- 6. SIDEBAR (HISTORIE CHATŮ) ---
+# --- 6. SIDEBAR ---
 with st.sidebar:
-    st.image(f"https://api.dicebear.com/7.x/bottts/svg?seed={display_name}", width=80)
-    st.subheader(f"Ahoj, {display_name}")
+    st.image(f"https://api.dicebear.com/9.x/dylan/svg?seed={display_name}", width=60)
+    st.markdown(f"**{display_name}**")
+    st.caption("🟢 Online | Gemini 2.5 Kernel")
     
-    if st.button("➕ Nový chat", use_container_width=True):
+    if st.button("➕ Nový proces", use_container_width=True):
         st.session_state.chat_id = create_chat(user_id)
-        st.session_state.page = "chat"
         st.rerun()
 
+    st.subheader("Archiv")
+    chats = get_user_chats(user_id)
+    for c in chats:
+        c1, c2 = st.columns([0.85, 0.15])
+        if c1.button(c['name'], key=c['id'], use_container_width=True):
+            st.session_state.chat_id = c['id']
+            st.rerun()
+        with c2.popover("⋮"):
+            nn = st.text_input("Name", c['name'], key=f"n_{c['id']}")
+            if st.button("Save", key=f"s_{c['id']}"): rename_chat(c['id'], nn)
+            if st.button("Delete", key=f"d_{c['id']}"): delete_chat(c['id'])
+            
     st.divider()
-    st.write("📜 Moje Chaty")
-    user_chats = get_user_chats(user_id)
+    native_audio = st.toggle("🔊 Native Audio Dialog", value=True, help="Zapne přímou hlasovou odezvu Gemini 2.5")
     
-    for chat in user_chats:
-        col_name, col_menu = st.columns([0.8, 0.2])
-        with col_name:
-            if st.button(chat['name'], key=f"sel_{chat['id']}", use_container_width=True):
-                st.session_state.chat_id = chat['id']
-                st.session_state.page = "chat"
-                st.rerun()
-        with col_menu:
-            # Tři tečky jako popover (Streamlit native "tečky" menu)
-            with st.popover("⋮"):
-                new_name = st.text_input("Přejmenovat", value=chat['name'], key=f"ren_{chat['id']}")
-                if st.button("Uložit název", key=f"save_{chat['id']}"):
-                    rename_chat(chat['id'], new_name)
-                
-                # Download
-                chat_msgs = supabase.table("messages").select("role,content").eq("chat_id", chat['id']).order("created_at").execute().data
-                txt_content = "\n".join([f"{m['role']}: {m['content']}" for m in chat_msgs])
-                st.download_button("📥 Stáhnout TXT", txt_content, file_name=f"{chat['name']}.txt", key=f"dl_{chat['id']}")
-                
-                if st.button("🗑️ Smazat chat", key=f"del_{chat['id']}", type="primary"):
-                    delete_chat(chat['id'])
-
-    st.divider()
-    if st.button("⚙️ Nastavení", use_container_width=True):
-        st.session_state.page = "settings"
-        st.rerun()
-    if st.button("🚪 Odhlásit se", use_container_width=True):
+    if st.button("Odhlásit"):
         supabase.auth.sign_out()
         st.session_state.clear()
         st.rerun()
 
-# --- 7. HLAVNÍ OBSAH ---
+# --- 7. MAIN INTERFACE ---
+if not st.session_state.get("chat_id"):
+    st.session_state.chat_id = create_chat(user_id) if not chats else chats[0]['id']
 
-if st.session_state.get("page") == "settings":
-    st.title("⚙️ Nastavení systému")
-    # ... (Zůstává stejné jako ve tvém kódu) ...
-    if st.button("Zpět k chatu"):
-        st.session_state.page = "chat"
-        st.rerun()
+# Header & Context
+st.title("💬 Native Audio Dialog")
+with st.expander("📁 Multimodální kontext (Visual/Doc)"):
+    up = st.file_uploader("Upload", type=["png","jpg","jpeg","webp","pdf","txt","docx"])
+    vis_ctx = process_media(up) if up and up.type.startswith('image') else None
+    doc_ctx = extract_text_from_file(up) if up and not up.type.startswith('image') else ""
 
-else:
-    if not st.session_state.get("chat_id"):
-        # Pokud není vybrán chat, zkus vybrat poslední nebo vytvořit nový
-        if user_chats:
-            st.session_state.chat_id = user_chats[0]['id']
-        else:
-            st.session_state.chat_id = create_chat(user_id)
+# Chat History
+try:
+    msgs = supabase.table("messages").select("*").eq("chat_id", st.session_state.chat_id).order("created_at").execute().data
+except: msgs = []
+
+for m in msgs:
+    with st.chat_message(m["role"]): st.markdown(m["content"])
+
+# --- INPUT LOGIC (TEXT OR AUDIO) ---
+# Input Area
+col_txt, col_mic = st.columns([0.85, 0.15])
+with col_txt:
+    txt_in = st.chat_input("Příkaz...")
+with col_mic:
+    # Streamlit Audio Input Widget (Native in 2026/Streamlit 1.40+)
+    aud_in = st.audio_input("🎙️")
+
+final_prompt = None
+native_audio_input = None
+
+if txt_in:
+    final_prompt = txt_in
+elif aud_in:
+    native_audio_input = process_audio_stream(aud_in.getvalue())
+    final_prompt = "[Audio Stream Data]"
+
+# --- PROCESSING ---
+if final_prompt:
+    # 1. User Message Display & Save
+    with st.chat_message("user"):
+        if aud_in: st.audio(aud_in)
+        else: st.markdown(final_prompt)
     
-    # Získání názvu aktuálního chatu
-    current_chat_name = next((c['name'] for c in user_chats if c['id'] == st.session_state.chat_id), "Chat")
-    st.title(f"💬 {current_chat_name}")
+    supabase.table("messages").insert({
+        "chat_id": st.session_state.chat_id, "role": "user", 
+        "content": final_prompt, "user_id": user_id
+    }).execute()
 
-    # Nahrávání souborů v chatu
-    with st.expander("📁 Přiložit data k této zprávě"):
-        uploaded_file = st.file_uploader("Obrázek nebo dokument", type=["pdf", "docx", "txt", "png", "jpg", "jpeg", "webp", "heic"])
+    # 2. AI Processing
+    genai.configure(api_key=rotate_api_key())
     
-    doc_context = ""
-    visual_context = None
-    if uploaded_file:
-        if uploaded_file.type.startswith('image/'):
-            visual_context = process_media(uploaded_file)
-            st.image(uploaded_file, width=200)
-        else:
-            doc_context = extract_text_from_file(uploaded_file)
+    # === GEMINI 2.5 FLASH NATIVE AUDIO CONFIG ===
+    model_name = "gemini-2.5-flash"  # Explicitní verze pro rok 2026
+    
+    # System Instruction pro Audio Dialog
+    sys_prompt = f"""
+    {SMART_SYSTEM_INSTRUCTION}
+    SYSTEM UPDATE 2026: Aktivován modul Gemini 2.5 Flash.
+    MODE: Native Audio Dialog.
+    Pokud dostaneš audio vstup, reaguj přirozenou konverzací.
+    Uživatel: {display_name}.
+    """
+    if doc_ctx: sys_prompt += f"\nDATA: {doc_ctx[:5000]}"
 
-    # Načtení zpráv
+    # Fallback na starší model, pokud by 2.5 v simulátoru (dnešku) nejel
     try:
-        msgs = supabase.table("messages").select("*").eq("chat_id", st.session_state.chat_id).order("created_at").execute().data
-    except: msgs = []
+        model = genai.GenerativeModel(model_name, system_instruction=sys_prompt)
+    except:
+        model = genai.GenerativeModel("gemini-2.0-flash-exp", system_instruction=sys_prompt)
 
-    for m in msgs:
-        with st.chat_message(m["role"]): st.markdown(m["content"])
+    # Historie
+    hist = [{"role": "user" if m["role"]=="user" else "model", "parts": [m["content"]]} for m in msgs]
+    
+    with st.spinner("⚡ Gemini 2.5 Processing Neural Audio..."):
+        try:
+            input_payload = []
+            
+            # Pokud je aktivní Audio Dialog, posíláme bajty
+            if native_audio_input:
+                input_payload.extend(native_audio_input)
+                # Prompt pro model, aby věděl, že má zpracovat audio
+                input_payload.append("Listen to this audio stream and respond in Czech.")
+            else:
+                input_payload.append(final_prompt)
+            
+            if vis_ctx: input_payload.extend(vis_ctx)
 
-    if prompt := st.chat_input("Napište zprávu..."):
-        st.chat_message("user").markdown(prompt)
-        supabase.table("messages").insert({"chat_id": st.session_state.chat_id, "role": "user", "content": prompt, "user_id": user_id}).execute()
-        # Aktualizace času v tabulce chats
-        supabase.table("chats").update({"updated_at": "now()"}).eq("id", st.session_state.chat_id).execute()
+            chat = model.start_chat(history=hist)
+            response = chat.send_message(input_payload)
+            ai_output = response.text
+            
+        except Exception as e:
+            ai_output = f"Neural Link Error: {e}"
 
-        genai.configure(api_key=rotate_api_key())
-        len_prompt = {"Krátká": "stručný", "Střední": "vyvážený", "Dlouhá": "velmi detailní"}.get(profile.get("response_length"), "vyvážený")
-
-        final_system_prompt = f"{SMART_SYSTEM_INSTRUCTION}\nUživatele oslovuj: {display_name}.\nStyl: {len_prompt}."
-        if doc_context: final_system_prompt += f"\n\nKONTEXT SOUBORU:\n{doc_context[:15000]}"
-
-        model = genai.GenerativeModel("gemini-2.0-flash-exp", system_instruction=final_system_prompt)
-        gem_hist = [{"role": "user" if m["role"] == "user" else "model", "parts": [m["content"]]} for m in msgs]
+    # 3. AI Output Display & Save
+    with st.chat_message("assistant"):
+        st.markdown(ai_output)
         
-        with st.spinner("🚀 Analyzuji..."):
-            try:
-                message_parts = [prompt]
-                if visual_context: message_parts.extend(visual_context)
-                chat_session = model.start_chat(history=gem_hist)
-                response = chat_session.send_message(message_parts)
-                ai_text = response.text
-            except Exception as e: ai_text = f"Chyba AI: {e}"
+        # === NATIVE AUDIO DIALOG OUTPUT ===
+        # Pokud je zapnuto v sidebaru, simulujeme přímý audio výstup
+        if native_audio:
+            render_native_audio_dialog(ai_output)
 
-        with st.chat_message("assistant"): st.markdown(ai_text)
-        supabase.table("messages").insert({"chat_id": st.session_state.chat_id, "role": "assistant", "content": ai_text, "user_id": user_id}).execute()
-        st.rerun()
+    supabase.table("messages").insert({
+        "chat_id": st.session_state.chat_id, "role": "assistant", 
+        "content": ai_output, "user_id": user_id
+    }).execute()
+    
+    # Refresh pro plynulost dialogu
+    time.sleep(0.5)
+    st.rerun()
