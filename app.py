@@ -9,6 +9,7 @@ from PIL import Image
 import io
 import base64
 from gtts import gTTS
+from duckduckgo_search import DDG
 
 # --- 0. HARDWARE AKCELERACE & IMPORTY (2026) ---
 try:
@@ -403,55 +404,49 @@ else:
 
         with chat_win:
             with st.chat_message("assistant"):
-                label = "🌐 Prohledávám web..." if web_search_enabled else "🧬 Jádro..."
-                
+                label = "🌐 Vlastní vyhledávání..." if web_search_enabled else "🧬 Jádro..."
                 with st.status(label) as status:
-                    # 1. PŘÍPRAVA HISTORIE (Zpětná kompatibilita)
-                    gemini_history = []
-                    for msg in messages[-10:]:
-                        m_role = "user" if msg["role"] == "user" else "model"
-                        # Gemini 2.5 vyžaduje, aby parts byl list stringů
-                        gemini_history.append({"role": m_role, "parts": [str(msg["content"])]})
-                    
-                    # 2. KONSTRUKCE PAYLOADU
-                    # Musíme zajistit, že v payloadu není nic jiného než povolené typy (text/blob)
-                    safe_query = str(final_query) if final_query else "Pokračuj"
-                    
-                    current_payload = []
-                    # Pokud máme audio, vložíme ho jako první
-                    if audio_data:
-                        current_payload.extend(audio_data)
-                    
-                    # Přidáme textový dotaz
-                    current_payload.append(safe_query)
-                    
-                    # Přidáme vizuální kontext
-                    if media_ctx:
-                        current_payload.extend(media_ctx)
-                    
-                    # Přidáme dokument
-                    if doc_ctx:
-                        current_payload.append(f"KONTEXT: {str(doc_ctx)[:2000]}")
+                
+                    # --- VLASTNÍ WEB SEARCH KERNEL ---
+                    web_context = ""
+                    if web_search_enabled:
+                        try:
+                            with DDGS() as ddgs:
+                            # Hledáme aktuální info k dotazu
+                                results = ddgs.text(final_query, region='wt-wt', safesearch='off', timelimit='y', max_results=3)
+                                for r in results:
+                                    web_context += f"\nZdroj: {r['title']}\nObsah: {r['body']}\n"
+                            status.write("🌐 Web prohledán, analyzuji data...")
+                        except Exception as e:
+                            status.write(f"⚠️ Web search selhal: {e}")
 
-                    # 3. SAMOTNÉ VOLÁNÍ (S FINÁLNÍM FALLBACKEM)
-                    try:
-                        # VŽDY používáme start_chat, pokud máme definované tools
-                        chat_session = model.start_chat(history=gemini_history)
-                        response = chat_session.send_message(current_payload)
-                        ai_response_text = response.text
-                    except Exception as e:
-                        # TOTÁLNÍ FALLBACK: 
-                        # Pokud selže chat i tools, vytvoříme na vteřinu model BEZ TOOLS
-                        # To zaručí, že odpověď dostaneš, i kdyby Google Search API mělo výpadek
-                        fallback_model = genai.GenerativeModel(model_name="gemini-2.5-flash")
-                        # Posíláme čistý string, žádný list
-                        response = fallback_model.generate_content(safe_query)
-                        ai_response_text = response.text
-                    
-                    status.update(label="🧬 Odpověď vygenerována", state="complete")
+                # 1. PŘÍPRAVA HISTORIE
+                gemini_history = []
+                for msg in messages[-10:]:
+                    m_role = "user" if msg["role"] == "user" else "model"
+                    gemini_history.append({"role": m_role, "parts": [str(msg["content"])]})
+                
+                # 2. KONSTRUKCE PAYLOADU S WEBOVÝM KONTEXTEM
+                # Modelu teď pošleme dotaz už i s daty z internetu
+                enhanced_prompt = f"OTÁZKA UŽIVATELE: {final_query}\n\n"
+                if web_context:
+                    enhanced_prompt += f"AKTUÁLNÍ DATA Z WEBU:\n{web_context}\n\nInstrukce: Odpověz na základě těchto dat."
 
-                # --- VÝSTUP ---
-                st.markdown(ai_response_text)
+                # 3. VOLÁNÍ MODELU (Teď už bez tools = STABILITA)
+                try:
+                    # Tady už nepoužíváme tools_config, aby to nepadalo
+                    simple_model = genai.GenerativeModel(
+                        model_name="gemini-2.5-flash",
+                        system_instruction=SMART_SYSTEM_INSTRUCTION
+                    )
+                    chat_session = simple_model.start_chat(history=gemini_history)
+                    response = chat_session.send_message(enhanced_prompt)
+                    ai_response_text = response.text
+                except Exception as e:
+                    st.error(f"Chyba AI: {e}")
+                    ai_response_text = "Omlouvám se, nastala chyba v jádru."
+
+                status.update(label="✅ Analýza dokončena", state="complete")
                 
                 # Zvuková syntéza
                 wait_seconds = 0
