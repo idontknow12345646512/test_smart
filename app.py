@@ -406,41 +406,46 @@ else:
                 label = "🌐 Prohledávám web..." if web_search_enabled else "🧬 Jádro..."
                 
                 with st.status(label) as status:
-                    # 1. ČIŠTĚNÍ HISTORIE
+                    # 1. PŘÍPRAVA HISTORIE (Zpětná kompatibilita)
                     gemini_history = []
                     for msg in messages[-10:]:
-                        # Musí to být čistý string, žádné speciální objekty
-                        m_content = str(msg["content"])
                         m_role = "user" if msg["role"] == "user" else "model"
-                        gemini_history.append({"role": m_role, "parts": [m_content]})
+                        # Gemini 2.5 vyžaduje, aby parts byl list stringů
+                        gemini_history.append({"role": m_role, "parts": [str(msg["content"])]})
                     
-                    # 2. PŘÍPRAVA DOTAZU (Payloadu)
-                    # Ujistíme se, že final_query není None
-                    safe_query = str(final_query) if final_query else "Ahoj"
+                    # 2. KONSTRUKCE PAYLOADU
+                    # Musíme zajistit, že v payloadu není nic jiného než povolené typy (text/blob)
+                    safe_query = str(final_query) if final_query else "Pokračuj"
                     
                     current_payload = []
+                    # Pokud máme audio, vložíme ho jako první
                     if audio_data:
                         current_payload.extend(audio_data)
-                        current_payload.append(f"Zpráva od uživatele: {safe_query}. Odpověz česky.")
-                    else:
-                        current_payload.append(safe_query)
                     
+                    # Přidáme textový dotaz
+                    current_payload.append(safe_query)
+                    
+                    # Přidáme vizuální kontext
                     if media_ctx:
                         current_payload.extend(media_ctx)
                     
+                    # Přidáme dokument
                     if doc_ctx:
-                        current_payload.append(f"\nKONTEXT Z DOKUMENTU: {str(doc_ctx)[:3000]}")
+                        current_payload.append(f"KONTEXT: {str(doc_ctx)[:2000]}")
 
-                    # 3. SAMOTNÉ GENEROVÁNÍ (Bezpečné volání)
+                    # 3. SAMOTNÉ VOLÁNÍ (S FINÁLNÍM FALLBACKEM)
                     try:
-                        # Vždy preferujeme chat_session pro modely s tools (Search)
+                        # VŽDY používáme start_chat, pokud máme definované tools
                         chat_session = model.start_chat(history=gemini_history)
                         response = chat_session.send_message(current_payload)
                         ai_response_text = response.text
                     except Exception as e:
-                        # Fallback: Pokud selže komplexní volání, zkusíme úplně nejjednodušší string
-                        # Bez listu [], jen čistý text
-                        response = model.generate_content(safe_query)
+                        # TOTÁLNÍ FALLBACK: 
+                        # Pokud selže chat i tools, vytvoříme na vteřinu model BEZ TOOLS
+                        # To zaručí, že odpověď dostaneš, i kdyby Google Search API mělo výpadek
+                        fallback_model = genai.GenerativeModel(model_name="gemini-2.5-flash")
+                        # Posíláme čistý string, žádný list
+                        response = fallback_model.generate_content(safe_query)
                         ai_response_text = response.text
                     
                     status.update(label="🧬 Odpověď vygenerována", state="complete")
