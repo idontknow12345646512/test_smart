@@ -13,34 +13,27 @@ from shared import extract_text_from_file, SMART_SYSTEM_INSTRUCTION
 # --- KONFIGURACE ---
 st.set_page_config(page_title="S.M.A.R.T. OS", page_icon="✨", layout="wide")
 
-# Moderní Gemini Dark UI
 st.markdown("""
     <style>
     .stApp { background-color: #0e0e10; color: #e3e3e3; }
     [data-testid="stSidebar"] { background-color: #171719; border-right: 1px solid #333; }
     .stChatMessage { border-radius: 15px; margin-bottom: 10px; }
-    /* Schování zbytečných lišt pro rychlost */
-    #MainMenu {visibility: hidden;}
-    footer {visibility: hidden;}
-    header {visibility: hidden;}
+    #MainMenu, footer, header { visibility: hidden; }
     </style>
 """, unsafe_allow_html=True)
 
-# --- ROTACE KLÍČŮ ---
-def get_random_google_key():
-    # Najde všechny klíče typu GOOGLE_API_KEY_1, _2 atd. v secrets
-    keys = [st.secrets[k] for k in st.secrets.keys() if "GOOGLE_API_KEY_" in k]
-    if not keys:
-        # Záložní pro případ, že máš jen jeden hlavní
-        return st.secrets.get("GOOGLE_API_KEY")
-    return random.choice(keys)
+# --- KLÍČE & ROTACE ---
+def get_all_keys():
+    return [st.secrets[k] for k in st.secrets.keys() if "GOOGLE_API_KEY_" in k]
 
 # --- INICIALIZACE ---
 if "chat_id" not in st.session_state: st.session_state.chat_id = str(uuid.uuid4())[:8]
 if "messages" not in st.session_state: st.session_state.messages = []
 
-# Supabase (stačí jednou)
-supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+try:
+    supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
+except:
+    st.error("Chyba připojení k Supabase.")
 
 # --- POMOCNÉ FUNKCE ---
 def generate_free_image(prompt):
@@ -49,8 +42,7 @@ def generate_free_image(prompt):
     try:
         response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=15)
         return Image.open(io.BytesIO(response.content))
-    except:
-        return None
+    except: return None
 
 def speak(text):
     clean_text = text.split("[IMAGE_GEN:")[0].replace("*", "").strip()
@@ -71,11 +63,10 @@ with st.sidebar:
         st.session_state.messages = []
         st.session_state.chat_id = str(uuid.uuid4())[:8]
         st.rerun()
-    
     voice_on = st.toggle("🔊 Aktivní hlas", value=True)
     uploaded_file = st.file_uploader("Analyzovat soubor", type=["pdf", "docx", "txt"])
 
-# --- CHAT STREAMING ---
+# --- CHAT ---
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
@@ -91,46 +82,50 @@ if user_input:
         response_placeholder = st.empty()
         full_response = ""
         
-        # Rotace klíče před každým dotazem
-        current_key = get_random_google_key()
-        genai.configure(api_key=current_key)
+        all_keys = get_all_keys()
+        random.shuffle(all_keys) # Zamícháme klíče
         
-        try:
-            model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SMART_SYSTEM_INSTRUCTION)
-            
-            # Příprava kontextu ze souboru
-            context = ""
-            if uploaded_file:
-                file_text = extract_text_from_file(uploaded_file)
-                context = f"\n\nKontext ze souboru: {file_text[:3000]}"
-            
-            # Streamování odpovědi pro pocit okamžité reakce
-            response = model.generate_content(user_input + context, stream=True)
-            
-            for chunk in response:
-                full_response += chunk.text
-                response_placeholder.markdown(full_response + "▌")
-            
-            response_placeholder.markdown(full_response)
-
-            # Detekce generování obrázku
+        success = False
+        for key in all_keys:
+            try:
+                genai.configure(api_key=key)
+                model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SMART_SYSTEM_INSTRUCTION)
+                
+                context = ""
+                if uploaded_file:
+                    file_text = extract_text_from_file(uploaded_file)
+                    context = f"\n\nKontext: {file_text[:2000]}"
+                
+                response = model.generate_content(user_input + context, stream=True)
+                for chunk in response:
+                    full_response += chunk.text
+                    response_placeholder.markdown(full_response + "▌")
+                
+                response_placeholder.markdown(full_response)
+                success = True
+                break # Povedlo se, končíme rotaci
+            except Exception as e:
+                continue # Zkusíme další klíč
+        
+        if not success:
+            st.error("Všechny API klíče jsou momentálně vytížené. Zkus to za chvíli.")
+        else:
             if "[IMAGE_GEN:" in full_response:
                 img_prompt = full_response.split("[IMAGE_GEN:")[1].split("]")[0].strip()
-                with st.spinner("Vytvářím vizuál..."):
+                with st.spinner("Kreslím..."):
                     img = generate_free_image(img_prompt)
-                    if img:
-                        st.image(img, use_container_width=True)
+                    if img: st.image(img, use_container_width=True)
 
-            if voice_on:
-                speak(full_response)
-
-            # Uložení do historie a DB
+            if voice_on: speak(full_response)
+            
             st.session_state.messages.append({"role": "assistant", "content": full_response})
-            supabase.table("messages").insert({
-                "chat_id": st.session_state.chat_id, 
-                "role": "assistant", 
-                "content": full_response
-            }).execute()
-
-        except Exception as e:
-            st.error(f"Chyba (zkuste to znovu, klíč mohl selhat): {e}")
+            
+            # Tichý zápis do DB (nezpůsobí pád aplikace při chybě RLS)
+            try:
+                supabase.table("messages").insert({
+                    "chat_id": st.session_state.chat_id, 
+                    "role": "assistant", 
+                    "content": full_response
+                }).execute()
+            except:
+                pass # Ignorujeme chybu RLS, aby uživatel mohl dál chatovat
