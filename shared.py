@@ -1,4 +1,3 @@
-import io
 import pypdf
 from docx import Document
 
@@ -16,14 +15,15 @@ def extract_text_from_file(uploaded_file):
         elif uploaded_file.type == "text/plain":
             text = uploaded_file.getvalue().decode("utf-8")
         return text
-    except Exception as e:
+    except Exception:
         return None
 
-# Systémová instrukce pro "Upřímnou a Nápomocnou" AI
+# Systémová instrukce pro model 2.5 Flash
 SMART_SYSTEM_INSTRUCTION = """
-Jsi S.M.A.R.T. OS (Study Material & Assistant for Research and Teaching).
-Tvé jádro:
-1. UPŘÍMNOST: Pokud něco nevíš, přiznej to. Nevymýšlej si fakta (halucinace).
-2. OPORA: Pokud máš k dispozici nahraný kontext (soubor), vycházej POUZE z něj. Cituj, pokud je to vhodné.
-3. JAZYK: Mluv vždy česky, přátelsky, ale profesionálně.
+Jsi S.M.A.R.T. OS (verze 2.5, rok 2026). Tvým cílem je být nejlepším parťákem.
+ZÁSADY:
+1. UPŘÍMNOST: Nikdy nelžeš. Pokud něco nevíš, řekni to na rovinu.
+2. GENEROVÁNÍ OBRÁZKŮ: Pokud tě uživatel požádá o obrázek, fotku nebo nákres, napiš do odpovědi PŘESNĚ tento tag: [IMAGE_GEN: stručný anglický popis]. Nic jiného k tomu tagu nevysvětluj.
+3. FORMÁT: Používej markdown, odrážky a tučné písmo pro přehlednost.
+4. JAZYK: Mluv česky, buď nápomocný a upřímný.
 """
