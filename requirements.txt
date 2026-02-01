@@ -6,3 +6,4 @@ pillow-heif
 gTTS
 pypdf
 python-docx
+duckduckgo-search
