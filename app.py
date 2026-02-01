@@ -402,51 +402,66 @@ else:
             "content": final_query, "user_id": user_id
         }).execute()
 
+# --- HLAVNÍ BLOK ASISTENTA ---
         with chat_win:
             with st.chat_message("assistant"):
-                label = "🌐 Vlastní vyhledávání..." if web_search_enabled else "🧬 Jádro..."
-                with st.status(label) as status:
+                label = "🌐 S.M.A.R.T. prohledává sítě..." if web_search_enabled else "🧬 Synchronizace jádra..."
                 
+                with st.status(label) as status:
                     # --- VLASTNÍ WEB SEARCH KERNEL ---
                     web_context = ""
                     if web_search_enabled:
                         try:
+                            from duckduckgo_search import DDGS
                             with DDGS() as ddgs:
-                            # Hledáme aktuální info k dotazu
-                                results = ddgs.text(final_query, region='wt-wt', safesearch='off', timelimit='y', max_results=3)
+                                # Optimalizace dotazu (pro svátky i obecné dotazy)
+                                search_query = final_query
+                                if "svátek" in final_query.lower():
+                                    search_query = f"kdo má dnes svátek {datetime.now().strftime('%d. %m.')}"
+                                
+                                results = list(ddgs.text(search_query, max_results=3))
                                 for r in results:
                                     web_context += f"\nZdroj: {r['title']}\nObsah: {r['body']}\n"
-                            status.write("🌐 Web prohledán, analyzuji data...")
+                            
+                            status.write("🌐 Data z webu získána, probíhá analýza...")
                         except Exception as e:
-                            status.write(f"⚠️ Web search selhal: {e}")
+                            status.write(f"⚠️ Web search momentálně nedostupný: {e}")
 
-                # 1. PŘÍPRAVA HISTORIE
-                gemini_history = []
-                for msg in messages[-10:]:
-                    m_role = "user" if msg["role"] == "user" else "model"
-                    gemini_history.append({"role": m_role, "parts": [str(msg["content"])]})
-                
-                # 2. KONSTRUKCE PAYLOADU S WEBOVÝM KONTEXTEM
-                # Modelu teď pošleme dotaz už i s daty z internetu
-                enhanced_prompt = f"OTÁZKA UŽIVATELE: {final_query}\n\n"
-                if web_context:
-                    enhanced_prompt += f"AKTUÁLNÍ DATA Z WEBU:\n{web_context}\n\nInstrukce: Odpověz na základě těchto dat."
+                    # 1. PŘÍPRAVA HISTORIE
+                    gemini_history = []
+                    for msg in messages[-10:]:
+                        m_role = "user" if msg["role"] == "user" else "model"
+                        gemini_history.append({"role": m_role, "parts": [str(msg["content"])]})
+                    
+                    # 2. KONSTRUKCE PAYLOADU S WEBOVÝM KONTEXTEM
+                    # Přidáme i aktuální datum, aby Gemini věděla, kdy je "dnes"
+                    enhanced_prompt = f"DNES JE: {datetime.now().strftime('%d. %m. %Y')}\n"
+                    enhanced_prompt += f"OTÁZKA UŽIVATELE: {final_query}\n\n"
+                    
+                    if web_context:
+                        enhanced_prompt += f"AKTUÁLNÍ DATA Z WEBU:\n{web_context}\n\n"
+                        enhanced_prompt += "Instrukce: Odpověz na základě těchto dat."
+                    else:
+                        enhanced_prompt += "Odpověz na základě svých znalostí."
 
-                # 3. VOLÁNÍ MODELU (Teď už bez tools = STABILITA)
-                try:
-                    # Tady už nepoužíváme tools_config, aby to nepadalo
-                    simple_model = genai.GenerativeModel(
-                        model_name="gemini-2.5-flash",
-                        system_instruction=SMART_SYSTEM_INSTRUCTION
-                    )
-                    chat_session = simple_model.start_chat(history=gemini_history)
-                    response = chat_session.send_message(enhanced_prompt)
-                    ai_response_text = response.text
-                except Exception as e:
-                    st.error(f"Chyba AI: {e}")
-                    ai_response_text = "Omlouvám se, nastala chyba v jádru."
+                    # 3. VOLÁNÍ MODELU
+                    try:
+                        # Inicializace modelu bez tools (vyhledávání jsme si udělali sami)
+                        simple_model = genai.GenerativeModel(
+                            model_name="gemini-2.5-flash",
+                            system_instruction=SMART_SYSTEM_INSTRUCTION
+                        )
+                        chat_session = simple_model.start_chat(history=gemini_history)
+                        response = chat_session.send_message(enhanced_prompt)
+                        ai_response_text = response.text
+                    except Exception as e:
+                        st.error(f"Chyba AI: {e}")
+                        ai_response_text = "Omlouvám se, nastala chyba v mém logickém jádru."
 
-                status.update(label="✅ Analýza dokončena", state="complete")
+                    status.update(label="✅ Analýza dokončena", state="complete")
+
+                # --- VÝSTUP A ZÁPIS ---
+                st.markdown(ai_response_text)
                 
                 # Zvuková syntéza
                 wait_seconds = 0
@@ -461,9 +476,10 @@ else:
                         "content": ai_response_text, 
                         "user_id": user_id
                     }).execute()
-                except:
+                except Exception as db_e:
                     pass
                 
+                # Čekání na doznění audia před rerunem
                 time.sleep(wait_seconds)
 
         st.session_state.processing = False
