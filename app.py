@@ -9,7 +9,7 @@ from PIL import Image
 import io
 import base64
 from gtts import gTTS
-from duckduckgo_search import DDG
+from duckduckgo_search import DDGS
 
 # --- 0. HARDWARE AKCELERACE & IMPORTY (2026) ---
 try:
