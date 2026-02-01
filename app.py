@@ -402,84 +402,85 @@ else:
             "content": final_query, "user_id": user_id
         }).execute()
 
-# --- HLAVNÍ BLOK ASISTENTA ---
+# --- HLAVNÍ BLOK ASISTENTA (VERZE 2026 - FULL POWER) ---
         with chat_win:
             with st.chat_message("assistant"):
                 label = "🌐 S.M.A.R.T. prohledává sítě..." if web_search_enabled else "🧬 Synchronizace jádra..."
                 
                 with st.status(label) as status:
-                    # --- VLASTNÍ WEB SEARCH KERNEL ---
+                    # 1. VLASTNÍ WEB SEARCH KERNEL
                     web_context = ""
                     if web_search_enabled:
                         try:
                             from duckduckgo_search import DDGS
                             with DDGS() as ddgs:
-                                # Optimalizace dotazu (pro svátky i obecné dotazy)
-                                search_query = final_query
-                                if "svátek" in final_query.lower():
-                                    search_query = f"kdo má dnes svátek {datetime.now().strftime('%d. %m.')}"
-                                
-                                results = list(ddgs.text(search_query, max_results=3))
+                                # Vyhledáváme přímo to, na co se uživatel ptá
+                                results = list(ddgs.text(final_query, max_results=5))
                                 for r in results:
-                                    web_context += f"\nZdroj: {r['title']}\nObsah: {r['body']}\n"
+                                    web_context += f"\nZDROJ: {r['title']}\nOBSAH: {r['body']}\n"
                             
-                            status.write("🌐 Data z webu získána, probíhá analýza...")
+                            status.write("🌐 Externí data stažena do mezipaměti...")
                         except Exception as e:
-                            status.write(f"⚠️ Web search momentálně nedostupný: {e}")
+                            status.write(f"⚠️ Externí sítě dočasně nedostupné.")
 
-                    # 1. PŘÍPRAVA HISTORIE
+                    # 2. PŘÍPRAVA HISTORIE (Posledních 10 zpráv)
                     gemini_history = []
                     for msg in messages[-10:]:
                         m_role = "user" if msg["role"] == "user" else "model"
                         gemini_history.append({"role": m_role, "parts": [str(msg["content"])]})
                     
-                    # 2. KONSTRUKCE PAYLOADU S WEBOVÝM KONTEXTEM
-                    # Přidáme i aktuální datum, aby Gemini věděla, kdy je "dnes"
-                    enhanced_prompt = f"DNES JE: {datetime.now().strftime('%d. %m. %Y')}\n"
-                    enhanced_prompt += f"OTÁZKA UŽIVATELE: {final_query}\n\n"
-                    
-                    if web_context:
-                        enhanced_prompt += f"AKTUÁLNÍ DATA Z WEBU:\n{web_context}\n\n"
-                        enhanced_prompt += "Instrukce: Odpověz na základě těchto dat."
-                    else:
-                        enhanced_prompt += "Odpověz na základě svých znalostí."
+                    # 3. KONSTRUKCE AGRESIVNÍHO "OS" PROMPTU
+                    # Tady definujeme, že "dnes" je skutečně dnes a data z webu jsou prioritní
+                    os_prompt = f"""
+[SYSTEM NOTIFICATION: KERNEL UPDATE {datetime.now().strftime('%d-%m-%Y %H:%M')}]
+AKTUÁLNÍ ČAS: {datetime.now().strftime('%H:%M')}
+AKTUÁLNÍ DATUM: {datetime.now().strftime('%d. %m. %Y')}
 
-                    # 3. VOLÁNÍ MODELU
+DATOVÝ KONTEXT Z WEBU:
+{web_context if web_context else "Žádná nová data z webu nejsou k dispozici. Použij interní databázi."}
+
+PŘÍKAZ UŽIVATELE: {final_query}
+
+INSTRUKCE PRO S.M.A.R.T. OS:
+- Jsi operační systém, ne chatbot. Odpovídej přímo, věcně a s autoritou.
+- Pokud máš v 'DATOVÉM KONTEXTU' odpověď, použij ji jako primární zdroj.
+- Nikdy neříkej, že nemáš přístup k internetu nebo reálnému času. 
+- Pokud se uživatel ptá na aktuální věci (počasí, svátky, zprávy), použij data z webu výše.
+- Odpověz česky, stručně a inteligentně.
+"""
+
+                    # 4. VOLÁNÍ MODELU
                     try:
-                        # Inicializace modelu bez tools (vyhledávání jsme si udělali sami)
+                        # Používáme model bez tools, protože web už jsme vyřešili sami = 100% stabilita
                         simple_model = genai.GenerativeModel(
-                            model_name="gemini-2.5-flash",
+                            model_name="gemini-2.0-flash", # Doporučuji 2.0/2.5 flash
                             system_instruction=SMART_SYSTEM_INSTRUCTION
                         )
                         chat_session = simple_model.start_chat(history=gemini_history)
-                        response = chat_session.send_message(enhanced_prompt)
+                        response = chat_session.send_message(os_prompt)
                         ai_response_text = response.text
                     except Exception as e:
-                        st.error(f"Chyba AI: {e}")
-                        ai_response_text = "Omlouvám se, nastala chyba v mém logickém jádru."
+                        st.error(f"Kritická chyba jádra: {e}")
+                        ai_response_text = "Systémová chyba. Restartujte relaci."
 
                     status.update(label="✅ Analýza dokončena", state="complete")
 
-                # --- VÝSTUP A ZÁPIS ---
+                # --- FINÁLNÍ VÝSTUP ---
                 st.markdown(ai_response_text)
                 
                 # Zvuková syntéza
                 wait_seconds = 0
-                if voice_output_enabled and ai_response_text:
+                if voice_output_enabled:
                     wait_seconds = render_native_audio_dialog(ai_response_text)
                 
-                # DB zápis
+                # Zápis do DB
                 try:
                     supabase.table("messages").insert({
-                        "chat_id": st.session_state.chat_id, 
-                        "role": "assistant", 
-                        "content": ai_response_text, 
-                        "user_id": user_id
+                        "chat_id": st.session_state.chat_id, "role": "assistant", 
+                        "content": ai_response_text, "user_id": user_id
                     }).execute()
-                except Exception as db_e:
-                    pass
+                except: pass
                 
-                # Čekání na doznění audia před rerunem
                 time.sleep(wait_seconds)
 
         st.session_state.processing = False
