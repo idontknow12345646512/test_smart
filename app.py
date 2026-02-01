@@ -405,50 +405,55 @@ else:
             with st.chat_message("assistant"):
                 label = "🌐 Prohledávám web..." if web_search_enabled else "🧬 Jádro..."
                 
-                # Všechna AI logika probíhá uvnitř statusu
                 with st.status(label) as status:
-                    # 1. PŘÍPRAVA HISTORIE
+                    # 1. ČIŠTĚNÍ HISTORIE
                     gemini_history = []
                     for msg in messages[-10:]:
-                        clean_content = str(msg["content"])
-                        role = "user" if msg["role"] == "user" else "model"
-                        gemini_history.append({"role": role, "parts": [clean_content]})
+                        # Musí to být čistý string, žádné speciální objekty
+                        m_content = str(msg["content"])
+                        m_role = "user" if msg["role"] == "user" else "model"
+                        gemini_history.append({"role": m_role, "parts": [m_content]})
                     
-                    # 2. PŘÍPRAVA PAYLOADU
+                    # 2. PŘÍPRAVA DOTAZU (Payloadu)
+                    # Ujistíme se, že final_query není None
+                    safe_query = str(final_query) if final_query else "Ahoj"
+                    
                     current_payload = []
                     if audio_data:
                         current_payload.extend(audio_data)
-                        current_payload.append("Toto je hlasová zpráva, odpověz na ni česky.")
+                        current_payload.append(f"Zpráva od uživatele: {safe_query}. Odpověz česky.")
                     else:
-                        current_payload.append(final_query)
+                        current_payload.append(safe_query)
                     
                     if media_ctx:
                         current_payload.extend(media_ctx)
                     
                     if doc_ctx:
-                        current_payload.append(f"\nKONTEXT Z DOKUMENTU: {doc_ctx[:3000]}")
+                        current_payload.append(f"\nKONTEXT Z DOKUMENTU: {str(doc_ctx)[:3000]}")
 
-                    # 3. SAMOTNÉ GENEROVÁNÍ
+                    # 3. SAMOTNÉ GENEROVÁNÍ (Bezpečné volání)
                     try:
+                        # Vždy preferujeme chat_session pro modely s tools (Search)
                         chat_session = model.start_chat(history=gemini_history)
                         response = chat_session.send_message(current_payload)
                         ai_response_text = response.text
                     except Exception as e:
-                        st.warning("Nouzový protokol aktivován...")
-                        response = model.generate_content([final_query])
+                        # Fallback: Pokud selže komplexní volání, zkusíme úplně nejjednodušší string
+                        # Bez listu [], jen čistý text
+                        response = model.generate_content(safe_query)
                         ai_response_text = response.text
                     
                     status.update(label="🧬 Odpověď vygenerována", state="complete")
 
-                # --- VÝSTUP (Mimo status, aby to uživatel hned viděl) ---
+                # --- VÝSTUP ---
                 st.markdown(ai_response_text)
                 
                 # Zvuková syntéza
                 wait_seconds = 0
-                if voice_output_enabled:
+                if voice_output_enabled and ai_response_text:
                     wait_seconds = render_native_audio_dialog(ai_response_text)
                 
-                # DB zápis odpovědi (Důležité: až když máme text)
+                # DB zápis
                 try:
                     supabase.table("messages").insert({
                         "chat_id": st.session_state.chat_id, 
@@ -456,12 +461,10 @@ else:
                         "content": ai_response_text, 
                         "user_id": user_id
                     }).execute()
-                except Exception as db_err:
-                    st.error(f"Chyba zápisu do DB: {db_err}")
+                except:
+                    pass
                 
-                # Počkáme na doznění hlasu, než se stránka refreshne
                 time.sleep(wait_seconds)
 
-        # Reset stavu a obnova stránky
         st.session_state.processing = False
         st.rerun()
