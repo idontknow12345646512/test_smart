@@ -13,65 +13,74 @@ from shared import extract_text_from_file, SMART_SYSTEM_INSTRUCTION
 # --- KONFIGURACE ---
 st.set_page_config(page_title="S.M.A.R.T. OS", page_icon="✨", layout="wide")
 
-st.markdown("""
-    <style>
-    .stApp { background-color: #0e0e10; color: #e3e3e3; }
-    [data-testid="stSidebar"] { background-color: #171719; border-right: 1px solid #333; }
-    .stChatMessage { border-radius: 15px; margin-bottom: 10px; }
-    #MainMenu, footer, header { visibility: hidden; }
-    </style>
-""", unsafe_allow_html=True)
+# Inicializace Supabase
+supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
 
-# --- KLÍČE & ROTACE ---
-def get_all_keys():
-    return [st.secrets[k] for k in st.secrets.keys() if "GOOGLE_API_KEY_" in k]
+# --- AUTH LOGIKA (ÚČTY) ---
+if "user" not in st.session_state:
+    st.session_state.user = None
 
-# --- INICIALIZACE ---
-if "chat_id" not in st.session_state: st.session_state.chat_id = str(uuid.uuid4())[:8]
-if "messages" not in st.session_state: st.session_state.messages = []
+def login_ui():
+    st.title("🧬 S.M.A.R.T. Login")
+    tab1, tab2 = st.tabs(["Přihlášení", "Registrace"])
+    
+    with tab1:
+        email = st.text_input("E-mail", key="login_email")
+        password = st.text_input("Heslo", type="password", key="login_pass")
+        if st.button("Vstoupit do OS"):
+            try:
+                res = supabase.auth.sign_in_with_password({"email": email, "password": password})
+                st.session_state.user = res.user
+                st.rerun()
+            except Exception as e:
+                st.error("Chybné údaje nebo uživatel neexistuje.")
 
-try:
-    supabase = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
-except:
-    st.error("Chyba připojení k Supabase.")
+    with tab2:
+        reg_email = st.text_input("E-mail", key="reg_email")
+        reg_password = st.text_input("Heslo (min. 6 znaků)", type="password", key="reg_pass")
+        if st.button("Vytvořit účet"):
+            try:
+                supabase.auth.sign_up({"email": reg_email, "password": reg_password})
+                st.success("Registrace úspěšná! Nyní se přihlaste.")
+            except Exception as e:
+                st.error(f"Chyba registrace: {e}")
 
-# --- POMOCNÉ FUNKCE ---
-def generate_free_image(prompt):
-    API_URL = "https://api-inference.huggingface.co/models/black-forest-labs/FLUX.1-schnell"
-    headers = {"Authorization": f"Bearer {st.secrets['HF_TOKEN']}"}
-    try:
-        response = requests.post(API_URL, headers=headers, json={"inputs": prompt}, timeout=15)
-        return Image.open(io.BytesIO(response.content))
-    except: return None
+# Pokud není uživatel přihlášen, zobrazíme jen login a ukončíme skript
+if st.session_state.user is None:
+    login_ui()
+    st.stop()
 
-def speak(text):
-    clean_text = text.split("[IMAGE_GEN:")[0].replace("*", "").strip()
-    if clean_text:
-        try:
-            tts = gTTS(text=clean_text[:300], lang='cs')
-            fp = io.BytesIO()
-            tts.write_to_fp(fp)
-            b64 = base64.b64encode(fp.getvalue()).decode()
-            audio_html = f'<audio autoplay><source src="data:audio/mp3;base64,{b64}" type="audio/mp3"></audio>'
-            st.components.v1.html(audio_html, height=0)
-        except: pass
+# --- HLAVNÍ APLIKACE (Po přihlášení) ---
 
-# --- SIDEBAR ---
+# Funkce pro klíče
+def get_random_key():
+    keys = [st.secrets[k] for k in st.secrets.keys() if "GOOGLE_API_KEY_" in k]
+    return random.choice(keys) if keys else st.secrets.get("GOOGLE_API_KEY")
+
+# Session state pro zprávy
+if "messages" not in st.session_state:
+    st.session_state.messages = []
+    # Načtení historie z DB pro daného uživatele
+    res = supabase.table("messages").select("*").eq("user_id", st.session_state.user.id).order("created_at").execute()
+    st.session_state.messages = [{"role": m["role"], "content": m["content"]} for m in res.data]
+
+# Sidebar s odhlášením
 with st.sidebar:
-    st.title("✨ S.M.A.R.T. 2.5")
-    if st.button("➕ Nový chat", use_container_width=True):
+    st.write(f"👤 **{st.session_state.user.email}**")
+    if st.button("Odhlásit se"):
+        supabase.auth.sign_out()
+        st.session_state.user = None
         st.session_state.messages = []
-        st.session_state.chat_id = str(uuid.uuid4())[:8]
         st.rerun()
-    voice_on = st.toggle("🔊 Aktivní hlas", value=True)
-    uploaded_file = st.file_uploader("Analyzovat soubor", type=["pdf", "docx", "txt"])
+    st.divider()
+    voice_on = st.toggle("🔊 Hlas", value=True)
 
-# --- CHAT ---
+# --- CHAT ENGINE ---
 for msg in st.session_state.messages:
     with st.chat_message(msg["role"]):
         st.markdown(msg["content"])
 
-user_input = st.chat_input("Napiš něco...")
+user_input = st.chat_input("Napiš S.M.A.R.T.ovi...")
 
 if user_input:
     st.session_state.messages.append({"role": "user", "content": user_input})
@@ -79,53 +88,31 @@ if user_input:
         st.markdown(user_input)
 
     with st.chat_message("assistant"):
-        response_placeholder = st.empty()
-        full_response = ""
+        full_res = ""
+        placeholder = st.empty()
         
-        all_keys = get_all_keys()
-        random.shuffle(all_keys) # Zamícháme klíče
+        # Rotace a Generování
+        genai.configure(api_key=get_random_key())
+        model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SMART_SYSTEM_INSTRUCTION)
         
-        success = False
-        for key in all_keys:
-            try:
-                genai.configure(api_key=key)
-                model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=SMART_SYSTEM_INSTRUCTION)
-                
-                context = ""
-                if uploaded_file:
-                    file_text = extract_text_from_file(uploaded_file)
-                    context = f"\n\nKontext: {file_text[:2000]}"
-                
-                response = model.generate_content(user_input + context, stream=True)
-                for chunk in response:
-                    full_response += chunk.text
-                    response_placeholder.markdown(full_response + "▌")
-                
-                response_placeholder.markdown(full_response)
-                success = True
-                break # Povedlo se, končíme rotaci
-            except Exception as e:
-                continue # Zkusíme další klíč
-        
-        if not success:
-            st.error("Všechny API klíče jsou momentálně vytížené. Zkus to za chvíli.")
-        else:
-            if "[IMAGE_GEN:" in full_response:
-                img_prompt = full_response.split("[IMAGE_GEN:")[1].split("]")[0].strip()
-                with st.spinner("Kreslím..."):
-                    img = generate_free_image(img_prompt)
-                    if img: st.image(img, use_container_width=True)
-
-            if voice_on: speak(full_response)
+        try:
+            response = model.generate_content(user_input, stream=True)
+            for chunk in response:
+                full_res += chunk.text
+                placeholder.markdown(full_res + "▌")
+            placeholder.markdown(full_res)
             
-            st.session_state.messages.append({"role": "assistant", "content": full_response})
+            # Uložení do historie a DB s vazbou na uživatele
+            st.session_state.messages.append({"role": "assistant", "content": full_res})
+            supabase.table("messages").insert({
+                "user_id": st.session_state.user.id,
+                "chat_id": "current", 
+                "role": "assistant",
+                "content": full_res
+            }).execute()
             
-            # Tichý zápis do DB (nezpůsobí pád aplikace při chybě RLS)
-            try:
-                supabase.table("messages").insert({
-                    "chat_id": st.session_state.chat_id, 
-                    "role": "assistant", 
-                    "content": full_response
-                }).execute()
-            except:
-                pass # Ignorujeme chybu RLS, aby uživatel mohl dál chatovat
+            # Hlasový výstup (volitelně)
+            # speak(full_res) - funkce z minulého kódu
+            
+        except Exception as e:
+            st.error(f"Chyba jádra: {e}")
